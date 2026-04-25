@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Environment variables — never commit the real .env
+.env
+
+# GCP service account key — never commit
+sa-key.json
+
+# IDE
+.idea/
+.vscode/
+*.swp

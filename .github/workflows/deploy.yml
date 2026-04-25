@@ -1,0 +1,78 @@
+name: Deploy API
+
+on:
+  release:
+    types: [published]
+
+env:
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_REGION: us-central1
+  API_SERVICE: machwave-api
+  WORKER_JOB: machwave-worker
+  IMAGE_REGISTRY: gcr.io
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: make install-dev
+      - run: make test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - run: gcloud auth configure-docker --quiet
+
+      - name: Build and push API image
+        run: |
+          IMAGE=$IMAGE_REGISTRY/$GCP_PROJECT_ID/$API_SERVICE:${{ github.ref_name }}
+          docker build -t $IMAGE .
+          docker push $IMAGE
+
+      - name: Build and push worker image
+        run: |
+          IMAGE=$IMAGE_REGISTRY/$GCP_PROJECT_ID/$WORKER_JOB:${{ github.ref_name }}
+          docker build -f Dockerfile.worker -t $IMAGE .
+          docker push $IMAGE
+
+      - name: Deploy API to Cloud Run
+        run: |
+          gcloud run deploy $API_SERVICE \
+            --image $IMAGE_REGISTRY/$GCP_PROJECT_ID/$API_SERVICE:${{ github.ref_name }} \
+            --region $GCP_REGION \
+            --platform managed \
+            --allow-unauthenticated \
+            --set-env-vars "GCS_BUCKET_NAME=${{ secrets.GCS_BUCKET_NAME }}" \
+            --set-env-vars "FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}" \
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID" \
+            --set-env-vars "CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}"
+
+      - name: Update worker Cloud Run Job
+        run: |
+          gcloud run jobs update $WORKER_JOB \
+            --image $IMAGE_REGISTRY/$GCP_PROJECT_ID/$WORKER_JOB:${{ github.ref_name }} \
+            --region $GCP_REGION \
+            --set-env-vars "GCS_BUCKET_NAME=${{ secrets.GCS_BUCKET_NAME }}" \
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID" \
+            --set-env-vars "FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}"

@@ -4,15 +4,52 @@ FastAPI backend for the machwave web platform.
 
 ## Architecture
 
-```
-Browser
-  └─ Firebase Auth (client-side)
-       └─ machwave-api  (Cloud Run)
-            ├─ GCS  (motor configs, simulation configs, results)
-            └─ Cloud Run Jobs  (machwave simulations — async worker)
+```mermaid
+flowchart TD
+    User(["👤 User"])
+
+    subgraph Vercel["Vercel"]
+        FE["Next.js Frontend"]
+    end
+
+    subgraph FirebaseAuth["Firebase Auth"]
+        FA["Identity &amp; JWT Issuance"]
+    end
+
+    subgraph GCP["Google Cloud Platform"]
+        subgraph CloudRunService["Cloud Run — API Service"]
+            API["machwave-api\n(FastAPI)"]
+        end
+
+        subgraph CloudRunJobs["Cloud Run Jobs — Simulation Worker"]
+            Worker["Simulation Worker"]
+            Lib["machwave lib\n(physics engine)"]
+            Worker -- "InternalBallisticsSimulation.run()" --> Lib
+        end
+
+        GCS[("Cloud Storage (GCS)\nmotor configs · sim configs\nstatus · results")]
+        GCR["Container Registry (GCR)\nAPI image · Worker image"]
+    end
+
+    subgraph CICD["CI / CD"]
+        GHR["GitHub Release"]
+    end
+
+    User -->|"browse"| FE
+    FE -->|"sign-in"| FA
+    FA -->|"JWT ID token"| FE
+    FE -->|"REST + Bearer JWT"| API
+    API -->|"verify JWT"| FA
+    API <-->|"motor &amp; sim CRUD"| GCS
+    API -->|"trigger execution"| CloudRunJobs
+    Worker <-->|"read config · write results"| GCS
+
+    GHR -->|"build &amp; push images"| GCR
+    GCR -->|"deploy"| CloudRunService
+    GCR -->|"update job image"| CloudRunJobs
 ```
 
-Users authenticate through Firebase. Every API request carries a Firebase ID token verified by the backend. Simulation jobs are dispatched as Cloud Run Job executions; the worker writes results to GCS and the API reads them back on demand.
+Users authenticate through Firebase. Every API request carries a Firebase ID token verified by the backend. Simulation jobs are dispatched as Cloud Run Job executions; the worker runs the `machwave` physics engine, writes results to GCS, and the API reads them back on demand.
 
 ## Main components
 

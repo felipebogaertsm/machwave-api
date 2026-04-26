@@ -90,22 +90,34 @@ docker compose run --env SIM_ID=<id> --env USER_ID=<uid> worker
 
 ## Deployment
 
-Deploy is triggered by creating a GitHub release. The workflow:
+Two environments live in the same `machwave` GCP project, distinguished by a `-dev` / `-prod` suffix on every resource (Cloud Run service, worker job, GCS bucket, runtime SA, GCR image). Each environment has its own Firebase project so user pools are isolated:
 
-1. Runs the test suite
-2. Builds and pushes images tagged with the release version to GCR
-3. Deploys the API image to Cloud Run
-4. Updates the worker Cloud Run Job image
+| Env | Trigger | Firebase project | Image tag |
+|---|---|---|---|
+| dev | push to `main` | `machwave-dev` | git SHA |
+| prod | GitHub release published | `machwave-76f5f` | release tag |
 
-Required GitHub secrets: `GCP_PROJECT_ID`, `GCP_SA_KEY`, `GCS_BUCKET_NAME`, `FIREBASE_PROJECT_ID`, `CORS_ORIGINS`.
+The workflow runs tests, then calls `make deploy-dev` or `make deploy-prod`, which delegate to [`scripts/deploy.sh`](scripts/deploy.sh). The same `make` targets work locally once you've authenticated:
+
+```bash
+gcloud auth login
+gcloud auth configure-docker
+
+make deploy-dev                  # uses current git SHA as the image tag
+make deploy-prod TAG=v1.2.3      # explicit tag required
+```
+
+Per-environment GitHub secrets (`WIF_PROVIDER`, `WIF_SERVICE_ACCOUNT`) are stored on the `dev` and `prod` GitHub Environments. Per-environment runtime config lives in [`deploy/dev/`](deploy/dev/) and [`deploy/prod/`](deploy/prod/).
 
 ## Commands
 
 ```bash
-make install-dev   # install dependencies (dev)
-make test          # run tests
-make check         # format check + lint
-make format        # auto-format
-make up            # start local API with docker compose
-make down          # stop
+make install-dev               # install dependencies (dev)
+make test                      # run tests
+make check                     # format check + lint
+make format                    # auto-format
+make up                        # start local API with docker compose
+make down                      # stop
+make deploy-dev                # deploy current branch to dev
+make deploy-prod TAG=v1.2.3    # deploy a tagged release to prod
 ```

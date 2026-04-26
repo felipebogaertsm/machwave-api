@@ -25,7 +25,7 @@ spec:
             - name: FIREBASE_PROJECT_ID
               value: machwave-76f5f
             - name: CORS_ORIGINS
-              value: https://machwave.app
+              value: https://machwave.felipebm.com
             - name: CLOUD_RUN_JOB_NAME
               value: machwave-worker-prod
             - name: CLOUD_RUN_JOB_REGION

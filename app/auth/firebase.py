@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from typing import Any
 
@@ -8,6 +9,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.config import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 _bearer = HTTPBearer(auto_error=True)
 
@@ -36,21 +39,25 @@ async def get_current_user(
             check_revoked=True,
         )
     except firebase_auth.RevokedIdTokenError as err:
+        logger.warning("Token revoked: %s", err)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has been revoked. Please sign in again.",
         ) from err
     except firebase_auth.ExpiredIdTokenError as err:
+        logger.warning("Token expired: %s", err)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired. Please sign in again.",
         ) from err
     except firebase_auth.InvalidIdTokenError as err:
+        logger.warning("Invalid token: %s", err)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication token.",
         ) from err
     except Exception as err:
+        logger.exception("Unexpected token validation failure: %s", err)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials.",

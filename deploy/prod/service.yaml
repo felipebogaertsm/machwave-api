@@ -29,6 +29,13 @@ spec:
               value: machwave-worker-prod
             - name: CLOUD_RUN_JOB_REGION
               value: us-central1
+          livenessProbe:
+            httpGet:
+              path: /health
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             limits:
               cpu: "1"

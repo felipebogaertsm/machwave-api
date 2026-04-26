@@ -10,6 +10,7 @@ spec:
       annotations:
         autoscaling.knative.dev/minScale: "0"
         autoscaling.knative.dev/maxScale: "10"
+        run.googleapis.com/startup-cpu-boost: "true"
     spec:
       serviceAccountName: machwave-api-prod@machwave.iam.gserviceaccount.com
       containers:
@@ -29,10 +30,17 @@ spec:
               value: machwave-worker-prod
             - name: CLOUD_RUN_JOB_REGION
               value: us-central1
+          startupProbe:
+            httpGet:
+              path: /health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
           livenessProbe:
             httpGet:
               path: /health
-            initialDelaySeconds: 30
+            initialDelaySeconds: 0
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3

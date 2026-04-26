@@ -1,6 +1,8 @@
 name: Deploy API
 
 on:
+  push:
+    branches: [main]
   release:
     types: [published]
 
@@ -18,27 +20,17 @@ jobs:
       - run: make install-dev
       - run: make test
 
-  deploy:
+  deploy-dev:
+    if: github.event_name == 'push'
     needs: test
     runs-on: ubuntu-latest
-    environment: prod
+    environment: dev
     permissions:
       contents: read
       id-token: write
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Load deploy config
-        run: |
-          python3 -c "
-          import yaml, os
-          with open('deploy/prod/config.yaml') as f:
-              config = yaml.safe_load(f)
-          with open(os.environ['GITHUB_ENV'], 'a') as env_file:
-              for k, v in config.items():
-                  env_file.write(f'{k}={v}\n')
-          "
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -50,26 +42,34 @@ jobs:
 
       - run: gcloud auth configure-docker --quiet
 
-      - name: Build and push API image
-        run: |
-          IMAGE=gcr.io/$GCP_PROJECT_ID/machwave-api-prod:${{ github.ref_name }}
-          docker build -t $IMAGE .
-          docker push $IMAGE
+      - name: Deploy
+        env:
+          TAG: ${{ github.sha }}
+        run: make deploy-dev
 
-      - name: Build and push worker image
-        run: |
-          IMAGE=gcr.io/$GCP_PROJECT_ID/machwave-worker-prod:${{ github.ref_name }}
-          docker build -f Dockerfile.worker -t $IMAGE .
-          docker push $IMAGE
+  deploy-prod:
+    if: github.event_name == 'release'
+    needs: test
+    runs-on: ubuntu-latest
+    environment: prod
+    permissions:
+      contents: read
+      id-token: write
 
-      - name: Deploy API to Cloud Run
-        run: |
-          IMAGE=gcr.io/$GCP_PROJECT_ID/machwave-api-prod:${{ github.ref_name }}
-          sed "s|IMAGE_PLACEHOLDER|$IMAGE|g" deploy/prod/service.yaml | \
-            gcloud run services replace - --region $GCP_REGION
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Update worker Cloud Run Job
-        run: |
-          IMAGE=gcr.io/$GCP_PROJECT_ID/machwave-worker-prod:${{ github.ref_name }}
-          sed "s|IMAGE_PLACEHOLDER|$IMAGE|g" deploy/prod/job.yaml | \
-            gcloud run jobs replace - --region $GCP_REGION
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - run: gcloud auth configure-docker --quiet
+
+      - name: Deploy
+        env:
+          TAG: ${{ github.ref_name }}
+        run: make deploy-prod

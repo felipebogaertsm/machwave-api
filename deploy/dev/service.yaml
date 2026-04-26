@@ -1,0 +1,50 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: machwave-api-dev
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "3"
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      serviceAccountName: machwave-api-dev@machwave.iam.gserviceaccount.com
+      containers:
+        - image: IMAGE_PLACEHOLDER
+          ports:
+            - containerPort: 8080
+          env:
+            - name: GCP_PROJECT_ID
+              value: machwave
+            - name: GCS_BUCKET_NAME
+              value: machwave-data-dev
+            - name: FIREBASE_PROJECT_ID
+              value: machwave-dev
+            - name: CORS_ORIGINS
+              value: https://dev.machwave.felipebm.com,http://localhost:3000
+            - name: CLOUD_RUN_JOB_NAME
+              value: machwave-worker-dev
+            - name: CLOUD_RUN_JOB_REGION
+              value: us-central1
+          startupProbe:
+            httpGet:
+              path: /health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /health
+            initialDelaySeconds: 0
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi

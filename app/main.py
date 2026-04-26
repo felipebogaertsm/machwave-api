@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
+from app.middleware.request_logging import LoggingMiddleware
 from app.routers import motors, propellants, simulations
 
 
@@ -34,6 +35,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    application.add_middleware(LoggingMiddleware)
 
     application.include_router(propellants.router, prefix="/propellants", tags=["propellants"])
     application.include_router(motors.router, prefix="/motors", tags=["motors"])

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build, push, and deploy machwave-api + worker for the given environment.
 # Usage: scripts/deploy.sh <env> <tag>
-#   env: dev | prod
-#   tag: docker image tag (e.g. git sha for dev, release tag for prod)
+#   env: prod
+#   tag: docker image tag (e.g. release tag)
 #
 # Assumes the caller is already authenticated to gcloud and Docker is configured
 # for the GCR registry (gcloud auth configure-docker).

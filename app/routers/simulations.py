@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
+import sys
 import uuid
 from typing import Any
 
@@ -20,13 +24,42 @@ from app.schemas.simulation import (
     SimulationSummary,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+# Strong references to in-flight worker subprocess tasks, so they aren't
+# garbage-collected before they finish.
+_worker_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _trigger_simulation(simulation_id: str, user_id: str) -> None:
+    """Dispatch a simulation. Local env uses a subprocess; prod uses Cloud Run Jobs."""
+    if get_settings().env == "local":
+        _spawn_local_worker(simulation_id, user_id)
+    else:
+        await _trigger_cloud_run_job(simulation_id, user_id)
+
+
+def _spawn_local_worker(simulation_id: str, user_id: str) -> None:
+    """Run the worker as a detached subprocess inheriting the current env."""
+
+    async def _run() -> None:
+        env = {**os.environ, "SIM_ID": simulation_id, "USER_ID": user_id}
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "app.worker.run", env=env
+        )
+        rc = await process.wait()
+        if rc != 0:
+            logger.error("Local worker exited %d for simulation_id=%s", rc, simulation_id)
+
+    task = asyncio.create_task(_run())
+    _worker_tasks.add(task)
+    task.add_done_callback(_worker_tasks.discard)
 
 
 async def _trigger_cloud_run_job(simulation_id: str, user_id: str) -> None:
     """Submit a Cloud Run Job execution with SIM_ID and USER_ID env overrides."""
-    import asyncio
-
     settings = get_settings()
 
     def _submit() -> None:
@@ -95,7 +128,7 @@ async def create_simulation(
     await simulation_repo.save_config(user_id, simulation_id, job_config)
     await simulation_repo.save_status(user_id, simulation_id, initial_status)
 
-    await _trigger_cloud_run_job(simulation_id, user_id)
+    await _trigger_simulation(simulation_id, user_id)
 
     return CreateSimulationResponse(simulation_id=simulation_id)
 

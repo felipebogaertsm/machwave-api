@@ -65,10 +65,12 @@ Users authenticate through Firebase. Every API request carries a Firebase ID tok
 
 ## Local development
 
+Local is the only non-prod environment for the API. It points at a separate Firebase project (`machwave-dev`) and GCS bucket (`machwave-data-dev`) so day-to-day work doesn't touch prod users or data.
+
 ### Prerequisites
 
 - Docker + Docker Compose
-- A GCP service account key with roles: `Storage Object Admin`, `Firebase Auth` read, `Cloud Run Jobs` invoker
+- A GCP service account key for `machwave-api-dev@machwave.iam.gserviceaccount.com` with roles: `Storage Object Admin` on `machwave-data-dev`, `firebaseauth.admin` on `machwave-dev`
 - A `.env` file (copy `.env.example` and fill in values)
 - Place the service account key at `./sa-key.json` (gitignored)
 
@@ -77,12 +79,14 @@ Users authenticate through Firebase. Every API request carries a Firebase ID tok
 ```bash
 cp .env.example .env
 # edit .env with your project values
-make up
+make run
 ```
 
 API is available at `http://localhost:8000`. Interactive docs at `http://localhost:8000/docs`.
 
-To run the worker manually:
+When `ENV=local`, simulation requests spawn the worker as a subprocess inside the API container instead of submitting a Cloud Run Job. Status and results are still written to the (dev) GCS bucket exactly like in prod.
+
+To run the worker manually for one simulation:
 
 ```bash
 docker compose run --env SIM_ID=<id> --env USER_ID=<uid> worker
@@ -90,24 +94,19 @@ docker compose run --env SIM_ID=<id> --env USER_ID=<uid> worker
 
 ## Deployment
 
-Two environments live in the same `machwave` GCP project, distinguished by a `-dev` / `-prod` suffix on every resource (Cloud Run service, worker job, GCS bucket, runtime SA, GCR image). Each environment has its own Firebase project so user pools are isolated:
+Only one Cloud Run environment exists: **prod**. Local development uses the dev Firebase project and dev GCS bucket for isolation, but there is no dev Cloud Run service.
 
-| Env | Trigger | Firebase project | Image tag |
-|---|---|---|---|
-| dev | push to `main` | `machwave-dev` | git SHA |
-| prod | GitHub release published | `machwave-76f5f` | release tag |
-
-The workflow runs tests, then calls `make deploy-dev` or `make deploy-prod`, which delegate to [`scripts/deploy.sh`](scripts/deploy.sh). The same `make` targets work locally once you've authenticated:
+Prod is triggered by publishing a GitHub release. The workflow runs tests, then calls `make deploy-prod`, which delegates to [`scripts/deploy.sh`](scripts/deploy.sh). The same `make` target works locally once authenticated:
 
 ```bash
 gcloud auth login
 gcloud auth configure-docker
 
-make deploy-dev                  # uses current git SHA as the image tag
 make deploy-prod TAG=v1.2.3      # explicit tag required
 ```
 
-Per-environment GitHub secrets (`WIF_PROVIDER`, `WIF_SERVICE_ACCOUNT`) are stored on the `dev` and `prod` GitHub Environments. Per-environment runtime config lives in [`deploy/dev/`](deploy/dev/) and [`deploy/prod/`](deploy/prod/).
+GitHub secrets `WIF_PROVIDER` and `WIF_SERVICE_ACCOUNT` are stored on the `prod` GitHub Environment. Runtime config lives in [`deploy/prod/`](deploy/prod/).
+
 
 ## Commands
 
@@ -116,8 +115,7 @@ make install-dev               # install dependencies (dev)
 make test                      # run tests
 make check                     # format check + lint
 make format                    # auto-format
-make up                        # start local API with docker compose
-make down                      # stop
-make deploy-dev                # deploy current branch to dev
+make run                       # start local API with docker compose
+make stop                      # stop
 make deploy-prod TAG=v1.2.3    # deploy a tagged release to prod
 ```

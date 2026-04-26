@@ -1,8 +1,6 @@
 name: Deploy API
 
 on:
-  push:
-    branches: [main]
   release:
     types: [published]
 
@@ -20,35 +18,7 @@ jobs:
       - run: make install-dev
       - run: make test
 
-  deploy-dev:
-    if: github.event_name == 'push'
-    needs: test
-    runs-on: ubuntu-latest
-    environment: dev
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
-
-      - uses: google-github-actions/setup-gcloud@v2
-
-      - run: gcloud auth configure-docker --quiet
-
-      - name: Deploy
-        env:
-          TAG: ${{ github.sha }}
-        run: make deploy-dev
-
   deploy-prod:
-    if: github.event_name == 'release'
     needs: test
     runs-on: ubuntu-latest
     environment: prod

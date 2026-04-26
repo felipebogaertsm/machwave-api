@@ -5,11 +5,10 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
-
 import firebase_admin
+from fastapi import APIRouter, Depends, HTTPException, status
 from firebase_admin import auth as firebase_auth
+from pydantic import BaseModel
 
 from app.auth.firebase import get_current_user, get_firebase_app
 from app.storage import gcs

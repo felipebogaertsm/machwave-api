@@ -36,7 +36,7 @@ async def get_current_user(
         decoded = firebase_auth.verify_id_token(
             credentials.credentials,
             app=app,
-            check_revoked=True,
+            check_revoked=False,
         )
     except firebase_auth.RevokedIdTokenError as err:
         logger.warning("Token revoked: %s", err)

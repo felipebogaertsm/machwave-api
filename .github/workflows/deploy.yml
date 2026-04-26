@@ -3,13 +3,7 @@ name: Deploy API
 on:
   release:
     types: [published]
-
-env:
-  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  GCP_REGION: us-central1
-  API_SERVICE: machwave-api
-  WORKER_JOB: machwave-worker
-  IMAGE_REGISTRY: gcr.io
+  pull_request:
 
 jobs:
   test:
@@ -35,10 +29,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Load deploy config
+        run: |
+          python3 -c "
+          import yaml, os
+          with open('deploy/prod/config.yaml') as f:
+              config = yaml.safe_load(f)
+          with open(os.environ['GITHUB_ENV'], 'a') as env_file:
+              for k, v in config.items():
+                  env_file.write(f'{k}={v}\n')
+          "
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
       - uses: google-github-actions/setup-gcloud@v2
 
@@ -46,33 +52,24 @@ jobs:
 
       - name: Build and push API image
         run: |
-          IMAGE=$IMAGE_REGISTRY/$GCP_PROJECT_ID/$API_SERVICE:${{ github.ref_name }}
+          IMAGE=gcr.io/$GCP_PROJECT_ID/machwave-api-prod:${{ github.ref_name }}
           docker build -t $IMAGE .
           docker push $IMAGE
 
       - name: Build and push worker image
         run: |
-          IMAGE=$IMAGE_REGISTRY/$GCP_PROJECT_ID/$WORKER_JOB:${{ github.ref_name }}
+          IMAGE=gcr.io/$GCP_PROJECT_ID/machwave-worker-prod:${{ github.ref_name }}
           docker build -f Dockerfile.worker -t $IMAGE .
           docker push $IMAGE
 
       - name: Deploy API to Cloud Run
         run: |
-          gcloud run deploy $API_SERVICE \
-            --image $IMAGE_REGISTRY/$GCP_PROJECT_ID/$API_SERVICE:${{ github.ref_name }} \
-            --region $GCP_REGION \
-            --platform managed \
-            --allow-unauthenticated \
-            --set-env-vars "GCS_BUCKET_NAME=${{ secrets.GCS_BUCKET_NAME }}" \
-            --set-env-vars "FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}" \
-            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID" \
-            --set-env-vars "CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}"
+          IMAGE=gcr.io/$GCP_PROJECT_ID/machwave-api-prod:${{ github.ref_name }}
+          sed "s|IMAGE_PLACEHOLDER|$IMAGE|g" deploy/prod/service.yaml | \
+            gcloud run services replace - --region $GCP_REGION
 
       - name: Update worker Cloud Run Job
         run: |
-          gcloud run jobs update $WORKER_JOB \
-            --image $IMAGE_REGISTRY/$GCP_PROJECT_ID/$WORKER_JOB:${{ github.ref_name }} \
-            --region $GCP_REGION \
-            --set-env-vars "GCS_BUCKET_NAME=${{ secrets.GCS_BUCKET_NAME }}" \
-            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID" \
-            --set-env-vars "FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}"
+          IMAGE=gcr.io/$GCP_PROJECT_ID/machwave-worker-prod:${{ github.ref_name }}
+          sed "s|IMAGE_PLACEHOLDER|$IMAGE|g" deploy/prod/job.yaml | \
+            gcloud run jobs replace - --region $GCP_REGION

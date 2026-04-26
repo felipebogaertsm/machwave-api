@@ -3,6 +3,12 @@ FROM python:3.12-slim AS builder
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    gfortran \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /build
 
 COPY pyproject.toml uv.lock* ./
@@ -13,8 +19,6 @@ RUN uv sync --frozen --no-dev --no-install-project
 FROM python:3.12-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    g++ \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 

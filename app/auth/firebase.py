@@ -22,13 +22,13 @@ def _init_firebase_app(project_id: str) -> firebase_admin.App:
     )
 
 
-def _get_firebase_app(settings: Settings = Depends(get_settings)) -> firebase_admin.App:
+def get_firebase_app(settings: Settings = Depends(get_settings)) -> firebase_admin.App:
     return _init_firebase_app(settings.firebase_project_id)
 
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer),
-    app: firebase_admin.App = Depends(_get_firebase_app),
+    app: firebase_admin.App = Depends(get_firebase_app),
 ) -> dict[str, Any]:
     from firebase_admin import auth as firebase_auth
 

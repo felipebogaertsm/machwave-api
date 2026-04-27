@@ -1,4 +1,4 @@
-.PHONY: install install-dev test build check format-check lint format typecheck run stop clean
+.PHONY: install install-dev test build check format-check lint format typecheck run stop clean deploy-prod
 
 install:
 	@uv sync
@@ -38,3 +38,11 @@ clean:
 	@find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	@find . -type d -name .pytest_cache -exec rm -rf {} + 2>/dev/null || true
 	@find . -type d -name .ruff_cache -exec rm -rf {} + 2>/dev/null || true
+
+# Build, push, and deploy to Cloud Run. Caller must be authenticated to gcloud
+# (gcloud auth login) and Docker (gcloud auth configure-docker).
+deploy-prod:
+	@if [ -z "$$TAG" ]; then \
+	  echo "TAG is required: make deploy-prod TAG=v1.2.3"; exit 1; \
+	fi
+	@scripts/deploy.sh prod "$$TAG"

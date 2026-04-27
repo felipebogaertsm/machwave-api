@@ -18,6 +18,8 @@ spec:
           ports:
             - containerPort: 8080
           env:
+            - name: ENV
+              value: prod
             - name: GCP_PROJECT_ID
               value: machwave
             - name: GCS_BUCKET_NAME

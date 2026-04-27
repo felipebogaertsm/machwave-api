@@ -34,6 +34,23 @@ def _results_blob(user_id: str, simulation_id: str) -> str:
 
 
 class SimulationRepository(GCSRepository):
+    async def list_all_simulation_pairs(self) -> list[tuple[str, str]]:
+        """Return ``(user_id, simulation_id)`` for every simulation in the bucket."""
+        all_blobs = await self._list("users/")
+        pairs: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for blob_name in all_blobs:
+            # Path: users/{user_id}/simulations/{simulation_id}/...
+            parts = blob_name.split("/")
+            if len(parts) < 5 or parts[0] != "users" or parts[2] != "simulations":
+                continue
+            pair = (parts[1], parts[3])
+            if pair in seen:
+                continue
+            seen.add(pair)
+            pairs.append(pair)
+        return pairs
+
     async def list_summaries(self, user_id: str) -> list[SimulationSummary]:
         all_blobs = await self._list(_simulations_prefix(user_id))
         status_blobs = [b for b in all_blobs if b.endswith("/status.json")]

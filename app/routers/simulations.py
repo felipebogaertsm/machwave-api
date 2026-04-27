@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
-import sys
 import uuid
 from typing import Any
 
@@ -13,80 +10,21 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.auth.firebase import get_current_user
-from app.config import get_settings
+from app.auth.rbac import require_role
 from app.repositories.motor import MotorRepository
 from app.repositories.simulation import SimulationRepository
 from app.schemas.simulation import (
     IBSimParamsSchema,
+    SimulationDetailsResponse,
     SimulationJobConfig,
-    SimulationResultsSchema,
     SimulationStatusRecord,
     SimulationSummary,
 )
+from app.worker.dispatch import trigger_simulation
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Strong references to in-flight worker subprocess tasks, so they aren't
-# garbage-collected before they finish.
-_worker_tasks: set[asyncio.Task[None]] = set()
-
-
-async def _trigger_simulation(simulation_id: str, user_id: str) -> None:
-    """Dispatch a simulation. Local env uses a subprocess; prod uses Cloud Run Jobs."""
-    if get_settings().env == "local":
-        _spawn_local_worker(simulation_id, user_id)
-    else:
-        await _trigger_cloud_run_job(simulation_id, user_id)
-
-
-def _spawn_local_worker(simulation_id: str, user_id: str) -> None:
-    """Run the worker as a detached subprocess inheriting the current env."""
-
-    async def _run() -> None:
-        env = {**os.environ, "SIM_ID": simulation_id, "USER_ID": user_id}
-        process = await asyncio.create_subprocess_exec(
-            sys.executable, "-m", "app.worker.run", env=env
-        )
-        rc = await process.wait()
-        if rc != 0:
-            logger.error("Local worker exited %d for simulation_id=%s", rc, simulation_id)
-
-    task = asyncio.create_task(_run())
-    _worker_tasks.add(task)
-    task.add_done_callback(_worker_tasks.discard)
-
-
-async def _trigger_cloud_run_job(simulation_id: str, user_id: str) -> None:
-    """Submit a Cloud Run Job execution with SIM_ID and USER_ID env overrides."""
-    settings = get_settings()
-
-    def _submit() -> None:
-        from google.cloud import run_v2
-
-        client = run_v2.JobsClient()
-        job_name = (
-            f"projects/{settings.gcp_project_id}"
-            f"/locations/{settings.cloud_run_job_region}"
-            f"/jobs/{settings.cloud_run_job_name}"
-        )
-        request = run_v2.RunJobRequest(
-            name=job_name,
-            overrides=run_v2.RunJobRequest.Overrides(
-                container_overrides=[
-                    run_v2.RunJobRequest.Overrides.ContainerOverride(
-                        env=[
-                            run_v2.EnvVar(name="SIM_ID", value=simulation_id),
-                            run_v2.EnvVar(name="USER_ID", value=user_id),
-                        ]
-                    )
-                ]
-            ),
-        )
-        client.run_job(request=request)
-
-    await asyncio.to_thread(_submit)
 
 
 class CreateSimulationRequest(BaseModel):
@@ -96,6 +34,11 @@ class CreateSimulationRequest(BaseModel):
 
 class CreateSimulationResponse(BaseModel):
     simulation_id: str
+
+
+class RerunAllResponse(BaseModel):
+    triggered: int
+    simulation_ids: list[str]
 
 
 @router.post("", response_model=CreateSimulationResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -128,9 +71,36 @@ async def create_simulation(
     await simulation_repo.save_config(user_id, simulation_id, job_config)
     await simulation_repo.save_status(user_id, simulation_id, initial_status)
 
-    await _trigger_simulation(simulation_id, user_id)
+    await trigger_simulation(simulation_id, user_id)
 
     return CreateSimulationResponse(simulation_id=simulation_id)
+
+
+@router.post(
+    "/rerun-all",
+    response_model=RerunAllResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def rerun_all_simulations(
+    _: dict[str, Any] = Depends(require_role("admin")),
+    repo: SimulationRepository = Depends(SimulationRepository),
+) -> RerunAllResponse:
+    """Re-dispatch every simulation in the bucket. Admin-only."""
+    pairs = await repo.list_all_simulation_pairs()
+    triggered: list[str] = []
+    for user_id, simulation_id in pairs:
+        config = await repo.get_config(user_id, simulation_id)
+        if config is None:
+            logger.warning("Skipping %s/%s — no config.json", user_id, simulation_id)
+            continue
+        await repo.save_status(
+            user_id,
+            simulation_id,
+            SimulationStatusRecord(simulation_id=simulation_id, status="pending"),
+        )
+        await trigger_simulation(simulation_id, user_id)
+        triggered.append(simulation_id)
+    return RerunAllResponse(triggered=len(triggered), simulation_ids=triggered)
 
 
 @router.get("", response_model=list[SimulationSummary])
@@ -155,13 +125,18 @@ async def get_simulation_status(
     return record
 
 
-@router.get("/{simulation_id}/results", response_model=SimulationResultsSchema)
+@router.get("/{simulation_id}/results", response_model=SimulationDetailsResponse)
 async def get_simulation_results(
     simulation_id: str,
     user: dict[str, Any] = Depends(get_current_user),
     repo: SimulationRepository = Depends(SimulationRepository),
-) -> SimulationResultsSchema:
-    """Only available once status is 'done'."""
+) -> SimulationDetailsResponse:
+    """Only available once status is 'done'.
+
+    Returns the full simulation payload — the time-series/scalar results plus
+    the motor config and IB parameters that produced them — so the frontend
+    can render charts and inputs side-by-side without a second round trip.
+    """
     user_id: str = user["uid"]
 
     sim_status = await repo.get_status(user_id, simulation_id)
@@ -185,7 +160,21 @@ async def get_simulation_results(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Results not found. The simulation may still be processing.",
         )
-    return results
+
+    job_config = await repo.get_config(user_id, simulation_id)
+    if job_config is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Simulation config not found.",
+        )
+
+    return SimulationDetailsResponse(
+        simulation_id=simulation_id,
+        motor_id=job_config.motor_id,
+        motor_config=job_config.motor_config,
+        params=job_config.params,
+        results=results,
+    )
 
 
 @router.delete("/{simulation_id}", status_code=status.HTTP_204_NO_CONTENT)

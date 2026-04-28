@@ -9,12 +9,19 @@ while stubbing out the real ``storage.Client`` so nothing reaches GCP.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
 
 from app.storage import gcs as gcs_module
+
+
+def _patched_client() -> MagicMock:
+    """Return ``_get_client()`` as the ``MagicMock`` the ``fake_bucket``
+    fixture installs. Pyright sees the real ``storage.Client`` signature
+    otherwise and rejects ``.return_value`` assignments."""
+    return cast(MagicMock, gcs_module._get_client())
 
 
 @pytest.fixture()
@@ -98,7 +105,7 @@ class TestDeletePrefix:
     async def test_deletes_all_listed_blobs(self, fake_bucket: MagicMock) -> None:
         # ``_get_client().list_blobs`` returns the iterable; route both calls
         # through the same client mock that ``fake_bucket`` set up.
-        client = gcs_module._get_client()  # the patched version
+        client = _patched_client()
         b1, b2 = MagicMock(), MagicMock()
         client.list_blobs.return_value = [b1, b2]
         # ``_sync_delete_prefix`` looks the bucket up again via
@@ -112,7 +119,7 @@ class TestDeletePrefix:
 
     @pytest.mark.asyncio
     async def test_noop_when_prefix_empty(self, fake_bucket: MagicMock) -> None:
-        client = gcs_module._get_client()
+        client = _patched_client()
         client.list_blobs.return_value = []
         delete_target = MagicMock()
         client.bucket.return_value = delete_target
@@ -124,7 +131,7 @@ class TestDeletePrefix:
 class TestListBlobs:
     @pytest.mark.asyncio
     async def test_returns_only_names(self, fake_bucket: MagicMock) -> None:
-        client = gcs_module._get_client()
+        client = _patched_client()
         b1, b2 = MagicMock(name="a"), MagicMock(name="b")
         b1.name = "a/1.json"
         b2.name = "a/2.json"

@@ -131,7 +131,7 @@ async def create_simulation(
             ),
         ) from exc
 
-    initial_status = SimulationStatusRecord(simulation_id=simulation_id, status="pending")
+    initial_status = SimulationStatusRecord(simulation_id=simulation_id)
     cost_record = SimulationCostRecord(
         simulation_id=simulation_id,
         estimated_tokens=estimated,

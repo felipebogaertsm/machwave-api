@@ -26,6 +26,7 @@ from app.schemas.simulation import (
     SimulationDetailsResponse,
     SimulationJobConfig,
     SimulationResultsSchema,
+    SimulationStatusEvent,
     SimulationStatusRecord,
     SimulationSummary,
     SolidSimulationResultsSchema,
@@ -124,10 +125,15 @@ class TestSimulationStatusRecord:
 
     def test_invalid_status_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            SimulationStatusRecord(simulation_id="sim-1", status="weird")  # type: ignore[arg-type]
+            SimulationStatusRecord.model_validate(
+                {"simulation_id": "sim-1", "events": [{"status": "weird"}]}
+            )
 
     def test_failed_with_error_message(self) -> None:
-        record = SimulationStatusRecord(simulation_id="sim-1", status="failed", error="boom")
+        record = SimulationStatusRecord(
+            simulation_id="sim-1",
+            events=[SimulationStatusEvent(status="failed", error="boom")],
+        )
         assert record.error == "boom"
         # JSON round-trip preserves error
         restored = SimulationStatusRecord.model_validate(record.model_dump(mode="json"))

@@ -26,6 +26,7 @@ from app.schemas.simulation import (
     SimulationDetailsResponse,
     SimulationJobConfig,
     SimulationResultsSchema,
+    SimulationStatusEvent,
     SimulationStatusRecord,
     SimulationSummary,
     SolidSimulationResultsSchema,
@@ -124,14 +125,44 @@ class TestSimulationStatusRecord:
 
     def test_invalid_status_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            SimulationStatusRecord(simulation_id="sim-1", status="weird")  # type: ignore[arg-type]
+            SimulationStatusRecord.model_validate(
+                {"simulation_id": "sim-1", "events": [{"status": "weird"}]}
+            )
 
     def test_failed_with_error_message(self) -> None:
-        record = SimulationStatusRecord(simulation_id="sim-1", status="failed", error="boom")
+        record = SimulationStatusRecord(
+            simulation_id="sim-1",
+            events=[SimulationStatusEvent(status="failed", error="boom")],
+        )
         assert record.error == "boom"
         # JSON round-trip preserves error
         restored = SimulationStatusRecord.model_validate(record.model_dump(mode="json"))
         assert restored == record
+
+    def test_append_builds_event_trail(self) -> None:
+        record = SimulationStatusRecord(simulation_id="sim-1")
+        record.append("running")
+        record.append("done")
+        assert [e.status for e in record.events] == ["pending", "running", "done"]
+        # Derived accessors track the latest event.
+        assert record.status == "done"
+        assert record.created_at == record.events[0].timestamp
+        assert record.updated_at == record.events[-1].timestamp
+
+    def test_legacy_flat_payload_migrates_to_single_event(self) -> None:
+        """Old GCS records pre-events have to load as a one-event trail."""
+        record = SimulationStatusRecord.model_validate(
+            {
+                "simulation_id": "sim-1",
+                "status": "running",
+                "error": None,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+        )
+        assert len(record.events) == 1
+        assert record.status == "running"
+        assert record.created_at == datetime(2026, 1, 1, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------

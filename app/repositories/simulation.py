@@ -9,6 +9,7 @@ from app.schemas.simulation import (
     LiquidSimulationResultsSchema,
     SimulationJobConfig,
     SimulationResultsSchema,
+    SimulationStatus,
     SimulationStatusRecord,
     SimulationSummary,
     SolidSimulationResultsSchema,
@@ -123,6 +124,21 @@ class SimulationRepository(GCSRepository):
         self, user_id: str, simulation_id: str, record: SimulationStatusRecord
     ) -> None:
         await self._write(_status_blob(user_id, simulation_id), record.model_dump(mode="json"))
+
+    async def append_status_event(
+        self,
+        user_id: str,
+        simulation_id: str,
+        status: SimulationStatus,
+        error: str | None = None,
+    ) -> SimulationStatusRecord:
+        """Load the existing status record (or seed one) and append an event."""
+        record = await self.get_status(user_id, simulation_id)
+        if record is None:
+            record = SimulationStatusRecord(simulation_id=simulation_id, events=[])
+        record.append(status, error=error)
+        await self.save_status(user_id, simulation_id, record)
+        return record
 
     async def save_results(
         self,

@@ -24,7 +24,6 @@ async def run(simulation_id: str, user_id: str) -> None:
     from app.schemas.simulation import (
         LiquidSimulationResultsSchema,
         SimulationStatus,
-        SimulationStatusRecord,
         SolidSimulationResultsSchema,
     )
 
@@ -33,8 +32,7 @@ async def run(simulation_id: str, user_id: str) -> None:
     account_repo = AccountRepository()
 
     async def set_status(status: SimulationStatus, error: str | None = None) -> None:
-        record = SimulationStatusRecord(simulation_id=simulation_id, status=status, error=error)
-        await repo.save_status(user_id, simulation_id, record)
+        await repo.append_status_event(user_id, simulation_id, status, error=error)
         logger.info("Status: %s  simulation_id=%s", status, simulation_id)
 
     async def fail(error: str) -> None:

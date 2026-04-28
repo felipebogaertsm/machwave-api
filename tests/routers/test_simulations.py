@@ -98,6 +98,7 @@ PROTECTED_ENDPOINTS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("GET", "/simulations", None),
     ("GET", "/simulations/some-id/status", None),
     ("GET", "/simulations/some-id/results", None),
+    ("POST", "/simulations/some-id/retry", None),
     ("DELETE", "/simulations/some-id", None),
     ("POST", "/admin/simulations/rerun-all", None),
     ("DELETE", "/admin/simulations/clear-all", None),
@@ -447,6 +448,93 @@ class TestGetSimulationResults:
 
 
 # ---------------------------------------------------------------------------
+# POST /simulations/{simulation_id}/retry
+# ---------------------------------------------------------------------------
+
+
+class TestRetrySimulation:
+    def test_appends_retried_event_and_dispatches(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_gcs: FakeGCS,
+        dispatch_recorder: DispatchRecorder,
+    ) -> None:
+        login_as(app, role="member", uid=MEMBER_UID)
+        _seed_motor(fake_gcs, MEMBER_UID)
+        _seed_simulation(fake_gcs, MEMBER_UID, "sim-1", status="failed", error="boom")
+
+        resp = client.post("/simulations/sim-1/retry")
+        assert resp.status_code == 202
+        assert resp.json()["simulation_id"] == "sim-1"
+        assert dispatch_recorder.calls == [("sim-1", MEMBER_UID)]
+
+        status = fake_gcs.blobs[f"users/{MEMBER_UID}/simulations/sim-1/status.json"]
+        # Prior 'failed' event preserved; retry appended.
+        assert [e["status"] for e in status["events"]] == ["failed", "retried"]
+        assert status["status"] == "retried"
+
+    @pytest.mark.parametrize("terminal_status", ["done", "failed"])
+    def test_allowed_from_terminal_states(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_gcs: FakeGCS,
+        dispatch_recorder: DispatchRecorder,
+        terminal_status: str,
+    ) -> None:
+        login_as(app, role="member", uid=MEMBER_UID)
+        _seed_motor(fake_gcs, MEMBER_UID)
+        _seed_simulation(fake_gcs, MEMBER_UID, "sim-1", status=terminal_status)
+        assert client.post("/simulations/sim-1/retry").status_code == 202
+
+    @pytest.mark.parametrize("active_status", ["pending", "running", "retried"])
+    def test_blocked_from_active_states(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_gcs: FakeGCS,
+        dispatch_recorder: DispatchRecorder,
+        active_status: str,
+    ) -> None:
+        login_as(app, role="member", uid=MEMBER_UID)
+        _seed_motor(fake_gcs, MEMBER_UID)
+        _seed_simulation(fake_gcs, MEMBER_UID, "sim-1", status=active_status)
+        resp = client.post("/simulations/sim-1/retry")
+        assert resp.status_code == 409
+        assert dispatch_recorder.calls == []
+
+    def test_unknown_returns_404(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_gcs: FakeGCS,
+        dispatch_recorder: DispatchRecorder,
+    ) -> None:
+        login_as(app, role="member", uid=MEMBER_UID)
+        assert client.post("/simulations/nope/retry").status_code == 404
+        assert dispatch_recorder.calls == []
+
+    def test_blocked_when_other_simulation_is_active(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_gcs: FakeGCS,
+        dispatch_recorder: DispatchRecorder,
+    ) -> None:
+        """Retrying a terminal sim while a different sim is mid-run must 409."""
+        login_as(app, role="member", uid=MEMBER_UID)
+        _seed_motor(fake_gcs, MEMBER_UID)
+        _seed_simulation(fake_gcs, MEMBER_UID, "old-failed", status="failed")
+        _seed_simulation(fake_gcs, MEMBER_UID, "in-flight", status="running")
+
+        resp = client.post("/simulations/old-failed/retry")
+        assert resp.status_code == 409
+        assert "in-flight" in resp.json()["detail"]
+        assert dispatch_recorder.calls == []
+
+
+# ---------------------------------------------------------------------------
 # DELETE /simulations/{simulation_id}
 # ---------------------------------------------------------------------------
 
@@ -521,10 +609,12 @@ class TestRerunAllSimulations:
         # Both simulations dispatched, each with the right user_id.
         assert sorted(dispatch_recorder.calls) == [("sim-a", "u1"), ("sim-b", "u2")]
 
-        # Statuses reset to pending for both.
-        for user_id, sim_id in [("u1", "sim-a"), ("u2", "sim-b")]:
+        # Each rerun appends a 'retried' event without erasing prior history.
+        for user_id, sim_id, prior in [("u1", "sim-a", "done"), ("u2", "sim-b", "failed")]:
             status = fake_gcs.blobs[f"users/{user_id}/simulations/{sim_id}/status.json"]
-            assert status["status"] == "pending"
+            assert status["status"] == "retried"
+            event_statuses = [e["status"] for e in status["events"]]
+            assert event_statuses == [prior, "retried"]
 
     def test_simulation_without_config_is_skipped(
         self,

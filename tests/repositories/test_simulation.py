@@ -19,6 +19,7 @@ from app.schemas.motor import (
 from app.schemas.simulation import (
     IBSimParamsSchema,
     SimulationJobConfig,
+    SimulationStatusEvent,
     SimulationStatusRecord,
 )
 from tests.conftest import FakeGCS
@@ -61,7 +62,10 @@ class TestSimulationCRUD:
     @pytest.mark.asyncio
     async def test_save_get_status_round_trip(self, fake_gcs: FakeGCS) -> None:
         repo = SimulationRepository()
-        record = SimulationStatusRecord(simulation_id="sim-1", status="running")
+        record = SimulationStatusRecord(
+            simulation_id="sim-1",
+            events=[SimulationStatusEvent(status="running")],
+        )
         await repo.save_status("u1", "sim-1", record)
         assert "users/u1/simulations/sim-1/status.json" in fake_gcs.blobs
 
@@ -143,7 +147,10 @@ class TestListSummaries:
             await repo.save_status(
                 "u1",
                 sim_id,
-                SimulationStatusRecord(simulation_id=sim_id, created_at=ts, updated_at=ts),
+                SimulationStatusRecord(
+                    simulation_id=sim_id,
+                    events=[SimulationStatusEvent(status="pending", timestamp=ts)],
+                ),
             )
 
         summaries = await repo.list_summaries("u1")

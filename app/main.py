@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.middleware.request_logging import LoggingMiddleware
-from app.routers import motors, propellants, simulations, users
+from app.routers import motors, propellants, simulations, usage, users
 
 
 @asynccontextmanager
@@ -41,6 +41,8 @@ def create_app() -> FastAPI:
     application.include_router(motors.router, prefix="/motors", tags=["motors"])
     application.include_router(simulations.router, prefix="/simulations", tags=["simulations"])
     application.include_router(users.router, prefix="/users", tags=["users"])
+    application.include_router(usage.router, tags=["usage"])
+    application.include_router(usage.admin_router, prefix="/admin/users", tags=["admin"])
     application.include_router(users.admin_router, prefix="/admin/users", tags=["admin"])
     application.include_router(motors.admin_router, prefix="/admin/motors", tags=["admin"])
     application.include_router(

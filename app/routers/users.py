@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 import firebase_admin
@@ -12,6 +13,7 @@ from pydantic import BaseModel
 
 from app.auth.firebase import get_current_user, get_firebase_app
 from app.auth.rbac import Role, get_user_role, require_role
+from app.repositories.account import AccountRepository
 from app.storage import gcs
 
 router = APIRouter()
@@ -21,14 +23,19 @@ admin_router = APIRouter()
 class UserSummary(BaseModel):
     uid: str
     email: str | None
+    email_verified: bool
     display_name: str | None
+    photo_url: str | None
     disabled: bool
     role: Role
+    created_at: datetime | None
+    last_sign_in_at: datetime | None
 
 
 class ListUsersResponse(BaseModel):
     users: list[UserSummary]
     next_page_token: str | None
+    has_more: bool
 
 
 class SetRoleRequest(BaseModel):
@@ -39,14 +46,28 @@ class SetDisabledRequest(BaseModel):
     disabled: bool
 
 
+def _ms_to_datetime(value: int | float | None) -> datetime | None:
+    """Firebase timestamps come back as ms since epoch. None when unset."""
+    if value is None:
+        return None
+    return datetime.fromtimestamp(value / 1000, tz=UTC)
+
+
 def _summarize(record: firebase_auth.UserRecord) -> UserSummary:
     claims = record.custom_claims or {}
+    metadata = getattr(record, "user_metadata", None)
+    creation_ts = getattr(metadata, "creation_timestamp", None) if metadata else None
+    last_sign_in_ts = getattr(metadata, "last_sign_in_timestamp", None) if metadata else None
     return UserSummary(
         uid=str(record.uid),
         email=record.email,
+        email_verified=bool(getattr(record, "email_verified", False)),
         display_name=record.display_name,
+        photo_url=getattr(record, "photo_url", None),
         disabled=bool(record.disabled),
         role=get_user_role(claims),
+        created_at=_ms_to_datetime(creation_ts),
+        last_sign_in_at=_ms_to_datetime(last_sign_in_ts),
     )
 
 
@@ -61,16 +82,22 @@ async def admin_list_users(
     _: dict[str, Any] = Depends(require_role("admin")),
     app: firebase_admin.App = Depends(get_firebase_app),
 ) -> ListUsersResponse:
-    """List Firebase users. Admin-only."""
+    """List Firebase users. Admin-only.
+
+    Token-based pagination — pass ``page_token`` from the previous response to
+    fetch the next page. ``has_more`` is true while another page exists.
+    """
     page = await asyncio.to_thread(
         firebase_auth.list_users,
         page_token=page_token,
         max_results=max_results,
         app=app,
     )
+    next_token = page.next_page_token or None
     return ListUsersResponse(
         users=[_summarize(u) for u in page.users],
-        next_page_token=page.next_page_token or None,
+        next_page_token=next_token,
+        has_more=next_token is not None,
     )
 
 
@@ -80,11 +107,14 @@ async def admin_set_role(
     body: SetRoleRequest,
     actor: dict[str, Any] = Depends(require_role("admin")),
     app: firebase_admin.App = Depends(get_firebase_app),
+    account_repo: AccountRepository = Depends(AccountRepository),
 ) -> UserSummary:
     """Set a user's role custom claim. Admin-only.
 
-    The user must sign out and back in (or call ``getIdToken(true)``) before
-    the new claim takes effect on their client.
+    Also syncs the user's account limits to the new role's defaults — admins
+    get ``None`` (unlimited), members get config defaults — so storage stays
+    consistent with the claim. The user must sign out and back in (or call
+    ``getIdToken(true)``) before the new claim takes effect on their client.
     """
     if actor["uid"] == user_id and body.role != "admin":
         raise HTTPException(
@@ -109,6 +139,7 @@ async def admin_set_role(
         claims or None,
         app=app,
     )
+    await account_repo.reset_to_role_defaults(user_id, role=body.role)
     record = await asyncio.to_thread(firebase_auth.get_user, user_id, app=app)
     return _summarize(record)
 

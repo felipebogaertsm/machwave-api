@@ -107,9 +107,7 @@ def _seed_account(
     }
 
 
-def _seed_admin_account(
-    fake_gcs: FakeGCS, user_id: str, *, tokens_used: int = 0
-) -> None:
+def _seed_admin_account(fake_gcs: FakeGCS, user_id: str, *, tokens_used: int = 0) -> None:
     """Convenience wrapper — admin accounts have None for every limit."""
     _seed_account(
         fake_gcs,
@@ -172,20 +170,55 @@ class TestEstimator:
             "propellant_id": "KNSB_NAKKA",
             "grain": {
                 "segments": [
-                    {"type": "bates", "outer_diameter": 0.114, "core_diameter": 0.060,
-                     "length": 0.2, "density_ratio": 0.95},
-                    {"type": "bates", "outer_diameter": 0.114, "core_diameter": 0.060,
-                     "length": 0.2, "density_ratio": 0.95},
-                    {"type": "bates", "outer_diameter": 0.114, "core_diameter": 0.060,
-                     "length": 0.2, "density_ratio": 0.95},
-                    {"type": "bates", "outer_diameter": 0.114, "core_diameter": 0.045,
-                     "length": 0.2, "density_ratio": 0.95},
-                    {"type": "bates", "outer_diameter": 0.114, "core_diameter": 0.045,
-                     "length": 0.2, "density_ratio": 0.95},
-                    {"type": "bates", "outer_diameter": 0.114, "core_diameter": 0.045,
-                     "length": 0.2, "density_ratio": 0.95},
-                    {"type": "bates", "outer_diameter": 0.114, "core_diameter": 0.045,
-                     "length": 0.2, "density_ratio": 0.95},
+                    {
+                        "type": "bates",
+                        "outer_diameter": 0.114,
+                        "core_diameter": 0.060,
+                        "length": 0.2,
+                        "density_ratio": 0.95,
+                    },
+                    {
+                        "type": "bates",
+                        "outer_diameter": 0.114,
+                        "core_diameter": 0.060,
+                        "length": 0.2,
+                        "density_ratio": 0.95,
+                    },
+                    {
+                        "type": "bates",
+                        "outer_diameter": 0.114,
+                        "core_diameter": 0.060,
+                        "length": 0.2,
+                        "density_ratio": 0.95,
+                    },
+                    {
+                        "type": "bates",
+                        "outer_diameter": 0.114,
+                        "core_diameter": 0.045,
+                        "length": 0.2,
+                        "density_ratio": 0.95,
+                    },
+                    {
+                        "type": "bates",
+                        "outer_diameter": 0.114,
+                        "core_diameter": 0.045,
+                        "length": 0.2,
+                        "density_ratio": 0.95,
+                    },
+                    {
+                        "type": "bates",
+                        "outer_diameter": 0.114,
+                        "core_diameter": 0.045,
+                        "length": 0.2,
+                        "density_ratio": 0.95,
+                    },
+                    {
+                        "type": "bates",
+                        "outer_diameter": 0.114,
+                        "core_diameter": 0.045,
+                        "length": 0.2,
+                        "density_ratio": 0.95,
+                    },
                 ],
                 "spacing": 0.01,
             },
@@ -235,9 +268,7 @@ class TestEstimator:
         config = SolidMotorConfigSchema.model_validate(_solid_config())
         # Bypass schema validation by mutating after construction is awkward;
         # instead, monkeypatch the registry lookup at the function layer.
-        burn_time = _solid_burn_time(
-            config.model_copy(update={"propellant_id": "KNSB_NAKKA"})
-        )
+        burn_time = _solid_burn_time(config.model_copy(update={"propellant_id": "KNSB_NAKKA"}))
         assert burn_time > 0
 
 
@@ -248,9 +279,7 @@ class TestEstimator:
 
 class TestAccountRepository:
     @pytest.mark.asyncio
-    async def test_creates_with_zero_usage_on_first_access(
-        self, fake_gcs: FakeGCS
-    ) -> None:
+    async def test_creates_with_zero_usage_on_first_access(self, fake_gcs: FakeGCS) -> None:
         from app.repositories.account import AccountRepository
 
         repo = AccountRepository()
@@ -293,9 +322,7 @@ class TestAccountRepository:
     async def test_debit_raises_when_over_limit(self, fake_gcs: FakeGCS) -> None:
         from app.repositories.account import AccountRepository, InsufficientBalanceError
 
-        _seed_account(
-            fake_gcs, "broke", monthly_token_limit=100, tokens_used=95
-        )
+        _seed_account(fake_gcs, "broke", monthly_token_limit=100, tokens_used=95)
         repo = AccountRepository()
         with pytest.raises(InsufficientBalanceError) as ei:
             await repo.debit("broke", 10)
@@ -346,18 +373,14 @@ class TestAccountRepository:
 
         _seed_account(fake_gcs, "promoted")
         repo = AccountRepository()
-        account = await repo.update_limits(
-            "promoted", {"monthly_token_limit": None}
-        )
+        account = await repo.update_limits("promoted", {"monthly_token_limit": None})
         assert account.credits.monthly_token_limit is None
         # Other fields untouched.
         assert account.motor_limit == 10
         assert account.simulation_limit == 10
 
     @pytest.mark.asyncio
-    async def test_reset_to_role_defaults_promotes_and_demotes(
-        self, fake_gcs: FakeGCS
-    ) -> None:
+    async def test_reset_to_role_defaults_promotes_and_demotes(self, fake_gcs: FakeGCS) -> None:
         from app.repositories.account import AccountRepository
 
         _seed_account(fake_gcs, "rotater")
@@ -398,9 +421,7 @@ class TestMotorCap:
         resp = client.post("/motors", json={"name": "n", "config": _solid_config()})
         assert resp.status_code == 409
 
-    def test_admin_bypasses_cap(
-        self, app: FastAPI, client: TestClient, fake_gcs: FakeGCS
-    ) -> None:
+    def test_admin_bypasses_cap(self, app: FastAPI, client: TestClient, fake_gcs: FakeGCS) -> None:
         login_as(app, uid=ADMIN_UID, role="admin")
         _seed_motors(fake_gcs, ADMIN_UID, 10)
 
@@ -439,9 +460,7 @@ class TestSimulationCreditGating:
         login_as(app, uid=MEMBER_UID)
         _seed_motor(fake_gcs, MEMBER_UID)
         # Tight: 1 token left, estimate will be > 1.
-        _seed_account(
-            fake_gcs, MEMBER_UID, monthly_token_limit=10_000, tokens_used=9_999
-        )
+        _seed_account(fake_gcs, MEMBER_UID, monthly_token_limit=10_000, tokens_used=9_999)
 
         resp = client.post("/simulations", json={"motor_id": "motor-1"})
         assert resp.status_code == 402
@@ -554,9 +573,7 @@ class TestSimulationCostEndpoint:
     ) -> None:
         login_as(app, uid=MEMBER_UID)
         _seed_motor(fake_gcs, MEMBER_UID)
-        sid = client.post("/simulations", json={"motor_id": "motor-1"}).json()[
-            "simulation_id"
-        ]
+        sid = client.post("/simulations", json={"motor_id": "motor-1"}).json()["simulation_id"]
 
         resp = client.get(f"/simulations/{sid}/cost")
         assert resp.status_code == 200
@@ -580,22 +597,20 @@ class TestSimulationCostEndpoint:
         sid = submit["simulation_id"]
         estimated = submit["estimated_tokens"]
 
-        usage_after_submit = fake_gcs.blobs[f"users/{MEMBER_UID}/account.json"][
-            "credits"
-        ]["tokens_used"]
+        usage_after_submit = fake_gcs.blobs[f"users/{MEMBER_UID}/account.json"]["credits"][
+            "tokens_used"
+        ]
         assert usage_after_submit == estimated
 
         assert client.delete(f"/simulations/{sid}").status_code == 204
 
-        usage_after_delete = fake_gcs.blobs[f"users/{MEMBER_UID}/account.json"][
-            "credits"
-        ]["tokens_used"]
+        usage_after_delete = fake_gcs.blobs[f"users/{MEMBER_UID}/account.json"]["credits"][
+            "tokens_used"
+        ]
         assert usage_after_delete == estimated
 
         # Simulation blobs (status, cost) are gone.
-        assert (
-            f"users/{MEMBER_UID}/simulations/{sid}/cost.json" not in fake_gcs.blobs
-        )
+        assert f"users/{MEMBER_UID}/simulations/{sid}/cost.json" not in fake_gcs.blobs
 
 
 # ---------------------------------------------------------------------------
@@ -676,9 +691,7 @@ class TestAdminAccountManagement:
         login_as(app, uid=MEMBER_UID)
         assert client.get(f"/admin/users/{MEMBER_UID}/account").status_code == 403
         assert (
-            client.put(
-                f"/admin/users/{MEMBER_UID}/limits", json={"motor_limit": 5}
-            ).status_code
+            client.put(f"/admin/users/{MEMBER_UID}/limits", json={"motor_limit": 5}).status_code
             == 403
         )
 
@@ -774,7 +787,8 @@ def _seed_pending_worker_sim(
 ) -> None:
     """Seed everything the worker needs to run: config, pending status, cost
     record with the given estimate, and a pre-charged account."""
-    from datetime import UTC, datetime as dt
+    from datetime import UTC
+    from datetime import datetime as dt
 
     period = current_period_utc()
     fake_gcs.blobs[f"users/{user_id}/simulations/{sim_id}/config.json"] = {
@@ -807,9 +821,7 @@ def _seed_pending_worker_sim(
         "completed_at": None,
         "refunded": False,
     }
-    _seed_account(
-        fake_gcs, user_id, monthly_token_limit=100_000, tokens_used=tokens_used
-    )
+    _seed_account(fake_gcs, user_id, monthly_token_limit=100_000, tokens_used=tokens_used)
 
 
 @pytest.mark.asyncio

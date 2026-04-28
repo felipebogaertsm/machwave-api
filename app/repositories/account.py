@@ -124,9 +124,7 @@ class AccountRepository(GCSRepository):
         await self.save(account)
         return account
 
-    async def update_limits(
-        self, user_id: str, updates: dict[str, int | None]
-    ) -> UserAccount:
+    async def update_limits(self, user_id: str, updates: dict[str, int | None]) -> UserAccount:
         """Apply the given fields. Pass ``{field: None}`` to mark unlimited;
         omit a field to leave it unchanged.
 
@@ -144,9 +142,7 @@ class AccountRepository(GCSRepository):
         await self.save(account)
         return account
 
-    async def reset_to_role_defaults(
-        self, user_id: str, *, role: str = "member"
-    ) -> UserAccount:
+    async def reset_to_role_defaults(self, user_id: str, *, role: str = "member") -> UserAccount:
         """Reset the limits (only) to the config defaults for ``role``. Used
         by the role-set flow so promotion/demotion keeps storage in sync.
         Preserves ``tokens_used`` and ``usage_period``."""

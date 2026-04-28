@@ -17,7 +17,6 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-
 _PERIOD_PATTERN = r"^\d{4}-\d{2}$"
 
 

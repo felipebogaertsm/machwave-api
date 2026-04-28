@@ -79,16 +79,13 @@ def _bates_initial_burn_area(seg: BatesSegmentSchema) -> float:
     """Inner cylindrical surface + 2 annular ends. Ignores inhibition geometry
     — close enough for the initial-Kn estimate."""
     inner = math.pi * seg.core_diameter * seg.length
-    end = math.pi * (seg.outer_diameter ** 2 - seg.core_diameter ** 2) / 4
+    end = math.pi * (seg.outer_diameter**2 - seg.core_diameter**2) / 4
     return inner + 2 * end
 
 
 def _max_web(motor_config: SolidMotorConfigSchema) -> float:
     """The web on the slowest-burning segment dominates total burn time."""
-    return max(
-        (seg.outer_diameter - seg.core_diameter) / 2
-        for seg in motor_config.grain.segments
-    )
+    return max((seg.outer_diameter - seg.core_diameter) / 2 for seg in motor_config.grain.segments)
 
 
 def _initial_burn_area(motor_config: SolidMotorConfigSchema) -> float:
@@ -97,7 +94,7 @@ def _initial_burn_area(motor_config: SolidMotorConfigSchema) -> float:
 
 def _throat_area(motor_config: SolidMotorConfigSchema) -> float:
     d = motor_config.thrust_chamber.nozzle.throat_diameter
-    return math.pi * d ** 2 / 4
+    return math.pi * d**2 / 4
 
 
 def _propellant_density(propellant: Any) -> float:

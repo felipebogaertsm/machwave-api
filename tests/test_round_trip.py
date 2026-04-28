@@ -14,15 +14,20 @@ import pytest
 
 from app.schemas.motor import (
     BatesSegmentSchema,
+    BipropellantInjectorSchema,
     CombustionChamberSchema,
     GrainSchema,
+    LiquidEngineConfigSchema,
+    LiquidEngineThrustChamberSchema,
     NozzleSchema,
     SolidMotorConfigSchema,
     SolidMotorThrustChamberSchema,
+    StackedTankPressureFedFeedSystemSchema,
+    TankSchema,
 )
 from app.schemas.simulation import (
     IBSimParamsSchema,
-    SimulationResultsSchema,
+    SolidSimulationResultsSchema,
 )
 
 # ---------------------------------------------------------------------------
@@ -158,7 +163,7 @@ class TestSolidMotorConfigSchema:
         grain_schema: GrainSchema,
         thrust_chamber_schema: SolidMotorThrustChamberSchema,
     ) -> None:
-        with pytest.raises(Exception, match="Unknown propellant_id"):
+        with pytest.raises(Exception, match="Unknown solid propellant_id"):
             SolidMotorConfigSchema(
                 propellant_id="NOT_A_REAL_PROPELLANT",
                 grain=grain_schema,
@@ -192,9 +197,10 @@ class TestSimulationRoundTrip:
         sim = InternalBallisticsSimulation(motor=motor, params=params)
         _t, motor_state = sim.run()
 
-        results = SimulationResultsSchema.from_machwave("test-sim-id", motor_state)
+        results = SolidSimulationResultsSchema.from_machwave("test-sim-id", motor_state)
 
         # Basic sanity checks
+        assert results.motor_type == "solid"
         assert results.simulation_id == "test-sim-id"
         assert results.total_impulse > 0
         assert results.thrust_time > 0
@@ -206,5 +212,147 @@ class TestSimulationRoundTrip:
 
         # Verify JSON round-trip
         raw = results.model_dump(mode="json")
-        restored = SimulationResultsSchema.model_validate(raw)
+        restored = SolidSimulationResultsSchema.model_validate(raw)
         assert restored.total_impulse == pytest.approx(results.total_impulse, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Liquid Rocket Engine (LRE)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def lre_oxidizer_tank() -> TankSchema:
+    return TankSchema(
+        fluid_name="Oxygen",
+        volume=0.05,
+        temperature=90.0,
+        initial_fluid_mass=30.0,
+    )
+
+
+@pytest.fixture()
+def lre_fuel_tank() -> TankSchema:
+    return TankSchema(
+        fluid_name="Hydrogen",
+        volume=0.07,
+        temperature=22.0,
+        initial_fluid_mass=5.0,
+    )
+
+
+@pytest.fixture()
+def lre_feed_system(
+    lre_oxidizer_tank: TankSchema,
+    lre_fuel_tank: TankSchema,
+) -> StackedTankPressureFedFeedSystemSchema:
+    return StackedTankPressureFedFeedSystemSchema(
+        oxidizer_line_diameter=0.012,
+        oxidizer_line_length=0.5,
+        fuel_line_diameter=0.012,
+        fuel_line_length=0.5,
+        fuel_tank=lre_fuel_tank,
+        oxidizer_tank=lre_oxidizer_tank,
+        piston_loss=50_000.0,
+    )
+
+
+@pytest.fixture()
+def lre_injector() -> BipropellantInjectorSchema:
+    return BipropellantInjectorSchema(
+        discharge_coefficient_fuel=0.7,
+        discharge_coefficient_oxidizer=0.7,
+        area_fuel=2.0e-5,
+        area_ox=4.0e-5,
+    )
+
+
+@pytest.fixture()
+def lre_thrust_chamber(
+    nozzle_schema: NozzleSchema,
+    chamber_schema: CombustionChamberSchema,
+    lre_injector: BipropellantInjectorSchema,
+) -> LiquidEngineThrustChamberSchema:
+    return LiquidEngineThrustChamberSchema(
+        nozzle=nozzle_schema,
+        injector=lre_injector,
+        combustion_chamber=chamber_schema,
+        dry_mass=8.0,
+        center_of_gravity_coordinate=(0.30, 0.0, 0.0),
+    )
+
+
+@pytest.fixture()
+def lre_config(
+    lre_thrust_chamber: LiquidEngineThrustChamberSchema,
+    lre_feed_system: StackedTankPressureFedFeedSystemSchema,
+) -> LiquidEngineConfigSchema:
+    return LiquidEngineConfigSchema(
+        propellant_id="LOX_LH2_6_0",
+        thrust_chamber=lre_thrust_chamber,
+        feed_system=lre_feed_system,
+        oxidizer_tank_cog=0.80,
+        fuel_tank_cog=1.20,
+    )
+
+
+class TestLiquidEngineConfigSchema:
+    def test_motor_type_default(self, lre_config: LiquidEngineConfigSchema) -> None:
+        assert lre_config.motor_type == "liquid"
+
+    def test_invalid_propellant_id_raises(
+        self,
+        lre_thrust_chamber: LiquidEngineThrustChamberSchema,
+        lre_feed_system: StackedTankPressureFedFeedSystemSchema,
+    ) -> None:
+        with pytest.raises(Exception, match="Unknown biliquid propellant_id"):
+            LiquidEngineConfigSchema(
+                propellant_id="NOT_A_REAL_PROPELLANT",
+                thrust_chamber=lre_thrust_chamber,
+                feed_system=lre_feed_system,
+            )
+
+    def test_json_roundtrip(self, lre_config: LiquidEngineConfigSchema) -> None:
+        raw = lre_config.model_dump(mode="json")
+        restored = LiquidEngineConfigSchema.model_validate(raw)
+        assert restored == lre_config
+
+    def test_to_machwave(self, lre_config: LiquidEngineConfigSchema) -> None:
+        from machwave.models.motors.liquid import LiquidEngine
+
+        engine = lre_config.to_machwave()
+        assert isinstance(engine, LiquidEngine)
+        assert engine.oxidizer_tank_cog == lre_config.oxidizer_tank_cog
+        assert engine.fuel_tank_cog == lre_config.fuel_tank_cog
+        # Feed system / tanks survived the conversion
+        assert engine.feed_system.oxidizer_tank.fluid_name == "Oxygen"
+        assert engine.feed_system.fuel_tank.fluid_name == "Hydrogen"
+        # Injector areas
+        assert engine.thrust_chamber.injector.area_fuel == pytest.approx(2.0e-5)
+        assert engine.thrust_chamber.injector.area_ox == pytest.approx(4.0e-5)
+
+
+class TestMotorConfigDiscriminator:
+    def test_solid_dispatches_to_solid_schema(
+        self, motor_config_schema: SolidMotorConfigSchema
+    ) -> None:
+        from pydantic import TypeAdapter
+
+        from app.schemas.motor import MotorConfigSchema
+
+        adapter = TypeAdapter(MotorConfigSchema)
+        raw = motor_config_schema.model_dump(mode="json")
+        restored = adapter.validate_python(raw)
+        assert isinstance(restored, SolidMotorConfigSchema)
+        assert restored.motor_type == "solid"
+
+    def test_liquid_dispatches_to_liquid_schema(self, lre_config: LiquidEngineConfigSchema) -> None:
+        from pydantic import TypeAdapter
+
+        from app.schemas.motor import MotorConfigSchema
+
+        adapter = TypeAdapter(MotorConfigSchema)
+        raw = lre_config.model_dump(mode="json")
+        restored = adapter.validate_python(raw)
+        assert isinstance(restored, LiquidEngineConfigSchema)
+        assert restored.motor_type == "liquid"

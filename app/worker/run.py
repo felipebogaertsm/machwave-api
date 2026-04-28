@@ -16,9 +16,10 @@ logger = logging.getLogger("machwave-worker")
 async def run(simulation_id: str, user_id: str) -> None:
     from app.repositories.simulation import SimulationRepository
     from app.schemas.simulation import (
-        SimulationResultsSchema,
+        LiquidSimulationResultsSchema,
         SimulationStatus,
         SimulationStatusRecord,
+        SolidSimulationResultsSchema,
     )
 
     repo = SimulationRepository()
@@ -55,16 +56,14 @@ async def run(simulation_id: str, user_id: str) -> None:
     # 4. Run simulation
     try:
         from machwave.simulation import InternalBallisticsSimulation
+        from machwave.states.liquid_engine import LiquidEngineState
         from machwave.states.solid_motor import SolidMotorState
 
         sim = InternalBallisticsSimulation(motor=motor, params=params)
-        _t, _motor_state = sim.run()
-        assert isinstance(_motor_state, SolidMotorState)
-        motor_state = _motor_state
+        _t, motor_state = sim.run()
         logger.info(
-            "Simulation complete: thrust_time=%.3f s  total_impulse=%.1f N·s",
+            "Simulation complete: thrust_time=%.3f s",
             motor_state.thrust_time,
-            motor_state.total_impulse,
         )
     except Exception as exc:
         logger.exception("Simulation failed")
@@ -73,7 +72,12 @@ async def run(simulation_id: str, user_id: str) -> None:
 
     # 5. Store results
     try:
-        results = SimulationResultsSchema.from_machwave(simulation_id, motor_state)
+        if isinstance(motor_state, SolidMotorState):
+            results = SolidSimulationResultsSchema.from_machwave(simulation_id, motor_state)
+        elif isinstance(motor_state, LiquidEngineState):
+            results = LiquidSimulationResultsSchema.from_machwave(simulation_id, motor_state)
+        else:
+            raise TypeError(f"Unsupported motor state type: {type(motor_state).__name__}")
         await repo.save_results(user_id, simulation_id, results)
     except Exception as exc:
         logger.exception("Failed to serialise/store results")

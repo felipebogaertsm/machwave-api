@@ -201,6 +201,64 @@ class TestCreateSimulation:
         assert resp.status_code == 404
         assert dispatch_recorder.calls == []
 
+    @pytest.mark.parametrize("active_status", ["pending", "running"])
+    def test_blocks_when_user_has_active_simulation(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_gcs: FakeGCS,
+        dispatch_recorder: DispatchRecorder,
+        active_status: str,
+    ) -> None:
+        login_as(app, role="member", uid=MEMBER_UID)
+        _seed_motor(fake_gcs, MEMBER_UID)
+        _seed_simulation(fake_gcs, MEMBER_UID, "in-flight", status=active_status)
+
+        resp = client.post("/simulations", json={"motor_id": "motor-1"})
+        assert resp.status_code == 409
+        assert active_status in resp.json()["detail"]
+        # No new simulation persisted, no dispatch.
+        assert dispatch_recorder.calls == []
+        sim_blobs = [
+            k
+            for k in fake_gcs.blobs
+            if k.startswith(f"users/{MEMBER_UID}/simulations/") and "in-flight" not in k
+        ]
+        assert sim_blobs == []
+
+    @pytest.mark.parametrize("prior_status", ["done", "failed"])
+    def test_allows_when_prior_simulations_are_terminal(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_gcs: FakeGCS,
+        dispatch_recorder: DispatchRecorder,
+        prior_status: str,
+    ) -> None:
+        login_as(app, role="member", uid=MEMBER_UID)
+        _seed_motor(fake_gcs, MEMBER_UID)
+        _seed_simulation(fake_gcs, MEMBER_UID, "old", status=prior_status)
+
+        resp = client.post("/simulations", json={"motor_id": "motor-1"})
+        assert resp.status_code == 202
+        assert len(dispatch_recorder.calls) == 1
+
+    def test_other_users_active_simulation_does_not_block(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_gcs: FakeGCS,
+        dispatch_recorder: DispatchRecorder,
+    ) -> None:
+        """The active-simulation gate is per-user — another user being mid-run
+        must not affect this caller."""
+        login_as(app, role="member", uid=MEMBER_UID)
+        _seed_motor(fake_gcs, MEMBER_UID)
+        _seed_simulation(fake_gcs, OTHER_UID, "theirs", status="running")
+
+        resp = client.post("/simulations", json={"motor_id": "motor-1"})
+        assert resp.status_code == 202
+
 
 # ---------------------------------------------------------------------------
 # GET /simulations

@@ -98,16 +98,26 @@ async def create_simulation(
     role = get_user_role(user)
 
     account = await account_repo.get_or_create(user_id, role=role)
-    if account.simulation_limit is not None:
-        existing = await simulation_repo.list_summaries(user_id)
-        if len(existing) >= account.simulation_limit:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Simulation limit reached ({account.simulation_limit}). "
-                    "Delete an existing simulation before submitting another."
-                ),
-            )
+    existing = await simulation_repo.list_summaries(user_id)
+
+    active = next((s for s in existing if s.status in ("pending", "running")), None)
+    if active is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"A simulation is already {active.status} (id: {active.simulation_id}). "
+                "Wait for it to finish before submitting another."
+            ),
+        )
+
+    if account.simulation_limit is not None and len(existing) >= account.simulation_limit:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Simulation limit reached ({account.simulation_limit}). "
+                "Delete an existing simulation before submitting another."
+            ),
+        )
     try:
         tokens_charged = await account_repo.debit(user_id, estimated)
     except InsufficientBalanceError as exc:

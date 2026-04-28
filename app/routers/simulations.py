@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 admin_router = APIRouter()
 
+ACTIVE_STATUSES = ("pending", "running", "retried")
+
 
 class CreateSimulationRequest(BaseModel):
     motor_id: str
@@ -100,7 +102,7 @@ async def create_simulation(
     account = await account_repo.get_or_create(user_id, role=role)
     existing = await simulation_repo.list_summaries(user_id)
 
-    active = next((s for s in existing if s.status in ("pending", "running")), None)
+    active = next((s for s in existing if s.status in ACTIVE_STATUSES), None)
     if active is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -195,11 +197,7 @@ async def rerun_all_simulations(
         if config is None:
             logger.warning("Skipping %s/%s — no config.json", user_id, simulation_id)
             continue
-        await repo.save_status(
-            user_id,
-            simulation_id,
-            SimulationStatusRecord(simulation_id=simulation_id, status="pending"),
-        )
+        await repo.append_status_event(user_id, simulation_id, "retried")
         await trigger_simulation(simulation_id, user_id)
         triggered.append(simulation_id)
     return RerunAllResponse(triggered=len(triggered), simulation_ids=triggered)
@@ -319,6 +317,86 @@ async def get_simulation_cost(
             detail="Cost record not found.",
         )
     return record
+
+
+@router.post(
+    "/{simulation_id}/retry",
+    response_model=CreateSimulationResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_simulation(
+    simulation_id: str,
+    user: dict[str, Any] = Depends(get_current_user),
+    simulation_repo: SimulationRepository = Depends(SimulationRepository),
+    cost_repo: CostRepository = Depends(CostRepository),
+    account_repo: AccountRepository = Depends(AccountRepository),
+) -> CreateSimulationResponse:
+    """Re-dispatch a terminal simulation, appending a 'retried' status event.
+
+    Charges a fresh estimate (failed runs were refunded; done runs already paid
+    for the prior work). Blocked while any other simulation is active.
+    """
+    user_id: str = user["uid"]
+
+    record = await simulation_repo.get_status(user_id, simulation_id)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Simulation not found.")
+    if record.status not in ("done", "failed"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Simulation is {record.status}; only terminal runs can be retried.",
+        )
+
+    job_config = await simulation_repo.get_config(user_id, simulation_id)
+    if job_config is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Simulation config not found.",
+        )
+
+    summaries = await simulation_repo.list_summaries(user_id)
+    other_active = next(
+        (s for s in summaries if s.simulation_id != simulation_id and s.status in ACTIVE_STATUSES),
+        None,
+    )
+    if other_active is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"A simulation is already {other_active.status} "
+                f"(id: {other_active.simulation_id}). "
+                "Wait for it to finish before retrying."
+            ),
+        )
+
+    estimated = estimate_tokens(job_config)
+    period = current_period_utc()
+    role = get_user_role(user)
+    await account_repo.get_or_create(user_id, role=role)
+
+    try:
+        tokens_charged = await account_repo.debit(user_id, estimated)
+    except InsufficientBalanceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=(
+                f"Insufficient tokens. Run estimated at {estimated}; "
+                f"only {exc.remaining} remaining this period."
+            ),
+        ) from exc
+
+    cost_record = SimulationCostRecord(
+        simulation_id=simulation_id,
+        estimated_tokens=estimated,
+        tokens_charged=tokens_charged,
+        period=period,
+    )
+    await cost_repo.save(user_id, simulation_id, cost_record)
+
+    await simulation_repo.append_status_event(user_id, simulation_id, "retried")
+    await trigger_simulation(simulation_id, user_id)
+
+    return CreateSimulationResponse(simulation_id=simulation_id, estimated_tokens=estimated)
 
 
 @router.delete("/{simulation_id}", status_code=status.HTTP_204_NO_CONTENT)

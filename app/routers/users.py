@@ -6,14 +6,166 @@ import asyncio
 from typing import Any
 
 import firebase_admin
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from firebase_admin import auth as firebase_auth
 from pydantic import BaseModel
 
 from app.auth.firebase import get_current_user, get_firebase_app
+from app.auth.rbac import Role, get_user_role, require_role
 from app.storage import gcs
 
 router = APIRouter()
+admin_router = APIRouter()
+
+
+class UserSummary(BaseModel):
+    uid: str
+    email: str | None
+    display_name: str | None
+    disabled: bool
+    role: Role
+
+
+class ListUsersResponse(BaseModel):
+    users: list[UserSummary]
+    next_page_token: str | None
+
+
+class SetRoleRequest(BaseModel):
+    role: Role
+
+
+class SetDisabledRequest(BaseModel):
+    disabled: bool
+
+
+def _summarize(record: firebase_auth.UserRecord) -> UserSummary:
+    claims = record.custom_claims or {}
+    return UserSummary(
+        uid=str(record.uid),
+        email=record.email,
+        display_name=record.display_name,
+        disabled=bool(record.disabled),
+        role=get_user_role(claims),
+    )
+
+
+def _user_not_found() -> HTTPException:
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+
+@admin_router.get("", response_model=ListUsersResponse)
+async def admin_list_users(
+    page_token: str | None = Query(default=None),
+    max_results: int = Query(default=100, ge=1, le=1000),
+    _: dict[str, Any] = Depends(require_role("admin")),
+    app: firebase_admin.App = Depends(get_firebase_app),
+) -> ListUsersResponse:
+    """List Firebase users. Admin-only."""
+    page = await asyncio.to_thread(
+        firebase_auth.list_users,
+        page_token=page_token,
+        max_results=max_results,
+        app=app,
+    )
+    return ListUsersResponse(
+        users=[_summarize(u) for u in page.users],
+        next_page_token=page.next_page_token or None,
+    )
+
+
+@admin_router.put("/{user_id}/role", response_model=UserSummary)
+async def admin_set_role(
+    user_id: str,
+    body: SetRoleRequest,
+    actor: dict[str, Any] = Depends(require_role("admin")),
+    app: firebase_admin.App = Depends(get_firebase_app),
+) -> UserSummary:
+    """Set a user's role custom claim. Admin-only.
+
+    The user must sign out and back in (or call ``getIdToken(true)``) before
+    the new claim takes effect on their client.
+    """
+    if actor["uid"] == user_id and body.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Admins cannot demote themselves. Have another admin do it.",
+        )
+
+    try:
+        record = await asyncio.to_thread(firebase_auth.get_user, user_id, app=app)
+    except firebase_auth.UserNotFoundError as err:
+        raise _user_not_found() from err
+
+    claims = dict(record.custom_claims or {})
+    if body.role == "member":
+        claims.pop("role", None)
+    else:
+        claims["role"] = body.role
+
+    await asyncio.to_thread(
+        firebase_auth.set_custom_user_claims,
+        user_id,
+        claims or None,
+        app=app,
+    )
+    record = await asyncio.to_thread(firebase_auth.get_user, user_id, app=app)
+    return _summarize(record)
+
+
+@admin_router.put("/{user_id}/disabled", response_model=UserSummary)
+async def admin_set_disabled(
+    user_id: str,
+    body: SetDisabledRequest,
+    actor: dict[str, Any] = Depends(require_role("admin")),
+    app: firebase_admin.App = Depends(get_firebase_app),
+) -> UserSummary:
+    """Enable or disable a user account. Disabled users cannot sign in or
+    refresh tokens. Existing ID tokens remain valid until they expire (≤1 hour).
+    """
+    if actor["uid"] == user_id and body.disabled:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Admins cannot disable themselves.",
+        )
+
+    try:
+        record = await asyncio.to_thread(
+            firebase_auth.update_user,
+            user_id,
+            disabled=body.disabled,
+            app=app,
+        )
+    except firebase_auth.UserNotFoundError as err:
+        raise _user_not_found() from err
+
+    return _summarize(record)
+
+
+@admin_router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_delete_user(
+    user_id: str,
+    actor: dict[str, Any] = Depends(require_role("admin")),
+    app: firebase_admin.App = Depends(get_firebase_app),
+) -> None:
+    """Permanently delete a user's Firebase account and all of their GCS data.
+
+    Admins cannot delete themselves through this endpoint — use the self-delete
+    flow at ``DELETE /users/{user_id}`` instead.
+    """
+    if actor["uid"] == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Admins cannot delete themselves through the admin endpoint.",
+        )
+
+    try:
+        await asyncio.to_thread(firebase_auth.get_user, user_id, app=app)
+    except firebase_auth.UserNotFoundError as err:
+        raise _user_not_found() from err
+
+    await gcs.delete_prefix(f"users/{user_id}/")
+    await asyncio.to_thread(firebase_auth.delete_user, user_id, app=app)
 
 
 @router.delete("/{user_id}/clear", status_code=status.HTTP_204_NO_CONTENT)

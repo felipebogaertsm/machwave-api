@@ -25,6 +25,7 @@ from app.worker.dispatch import trigger_simulation
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+admin_router = APIRouter()
 
 
 class CreateSimulationRequest(BaseModel):
@@ -76,7 +77,7 @@ async def create_simulation(
     return CreateSimulationResponse(simulation_id=simulation_id)
 
 
-@router.post(
+@admin_router.post(
     "/rerun-all",
     response_model=RerunAllResponse,
     status_code=status.HTTP_202_ACCEPTED,

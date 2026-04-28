@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # CORS — accept a comma-separated string and split it
     cors_origins: str = "http://localhost:3000"
 
+    # Default per-user caps. Admins have no caps.
+    default_motor_limit: int = 10
+    default_simulation_limit: int = 10
+    default_monthly_token_limit: int = 10_000
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

@@ -57,11 +57,52 @@ Users authenticate through Firebase. Every API request carries a Firebase ID tok
 |---|---|
 | `app/routers/motors.py` | Motor CRUD — stores configs as JSON in GCS |
 | `app/routers/simulations.py` | Trigger + poll simulations via Cloud Run Jobs |
+| `app/routers/usage.py` | Per-user account, quotas, admin limit overrides |
 | `app/routers/propellants.py` | Read-only propellant catalogue |
+| `app/credits/estimator.py` | Pre-run cost estimation engine |
+| `app/repositories/account.py` | Per-user balance + caps + monthly grant rollover |
+| `app/repositories/cost.py` | Per-simulation cost ledger |
 | `app/schemas/` | Pydantic v2 request/response models |
 | `app/storage/gcs.py` | Async GCS helpers |
 | `app/auth/firebase.py` | Firebase ID token verification |
 | `app/worker/run.py` | Cloud Run Jobs entry point |
+
+## Credit system
+
+Every simulation consumes **machwave tokens** (1 token ≈ 1 integration step). Each user has a per-user account at `users/{uid}/account.json` with their own caps and a usage counter — config supplies the defaults; admins can override per user via `PUT /admin/users/{uid}/limits`.
+
+### Monthly limit
+
+`tokens_used` starts at 0 and grows with each simulation. When it would exceed `monthly_token_limit` (default `10_000`, ≈ $0.10 USD) the next submit is rejected with **402**. The counter resets to 0 at the start of each calendar month (UTC). Admins bypass all checks.
+
+### Pre-charge / post-charge flow
+
+Submission and worker reconciliation are decoupled:
+
+1. `POST /simulations` → estimator computes `estimated_tokens` from the motor + `d_t`. The estimate is added to `tokens_used` up front and saved to `users/{uid}/simulations/{sid}/cost.json`. If `tokens_used + estimated > monthly_token_limit`, the request returns **402**.
+2. Worker runs, then computes `actual_tokens = len(motor_state.t)`. Depending on the delta:
+   - Actual < estimate → subtract the difference from `tokens_used` (refund).
+   - Actual > estimate → add the overage to `tokens_used` (best-effort if it would exceed the limit).
+3. Failure subtracts the entire pre-charge from `tokens_used`. Deleting a simulation likewise refunds whatever was charged.
+
+The estimator (`app/credits/estimator.py`) is intentionally a single function. Today it uses simple heuristics (web ÷ nominal burn rate for solids, propellant mass ÷ nominal flow for liquids); refine it without touching routers, the worker, or storage.
+
+### Quota enforcement
+
+- `account.motor_limit` (default 10) — checked on `POST /motors`.
+- `account.simulation_limit` (default 10) — checked on `POST /simulations`. This is a *stored* count cap, not a rate limit.
+- Both are config-defaulted, per-user mutable.
+
+### Inspecting state
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /me/account` | Full account: caps, limit, usage, period |
+| `GET /me/usage` | Counts vs caps + usage summary (the frontend's quota panel) |
+| `POST /simulations/estimate` | Dry-run cost — does not create or charge |
+| `GET /simulations/{id}/cost` | Per-sim estimated/actual breakdown |
+| `GET /admin/users/{uid}/account` | Admin view of any user's account |
+| `PUT /admin/users/{uid}/limits` | Admin override of `motor_limit`, `simulation_limit`, `monthly_token_limit` |
 
 ## Local development
 

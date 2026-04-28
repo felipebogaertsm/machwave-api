@@ -10,7 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.auth.firebase import get_current_user
-from app.auth.rbac import require_role
+from app.auth.rbac import get_user_role, require_role  # noqa: F401  (require_role used below)
+from app.repositories.account import AccountRepository
 from app.repositories.motor import MotorRepository
 from app.schemas.motor import MotorConfigSchema, MotorRecord, MotorSummary
 
@@ -42,8 +43,21 @@ async def create_motor(
     body: CreateMotorRequest,
     user: dict[str, Any] = Depends(get_current_user),
     repo: MotorRepository = Depends(MotorRepository),
+    account_repo: AccountRepository = Depends(AccountRepository),
 ) -> CreateMotorResponse:
     user_id: str = user["uid"]
+    role = get_user_role(user)
+    account = await account_repo.get_or_create(user_id, role=role)
+    if account.motor_limit is not None:
+        existing = await repo.list(user_id)
+        if len(existing) >= account.motor_limit:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Motor limit reached ({account.motor_limit}). "
+                    "Delete an existing motor before creating another."
+                ),
+            )
     motor_id = str(uuid.uuid4())
     record = MotorRecord(motor_id=motor_id, name=body.name, config=body.config)
     await repo.save(user_id, motor_id, record)

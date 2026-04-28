@@ -54,13 +54,24 @@ def _make_record(
     display_name: str | None = None,
     disabled: bool = False,
     custom_claims: dict[str, Any] | None = None,
+    *,
+    email_verified: bool = False,
+    photo_url: str | None = None,
+    creation_timestamp: int | None = 1_700_000_000_000,  # ms since epoch
+    last_sign_in_timestamp: int | None = 1_711_000_000_000,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         uid=uid,
         email=email or f"{uid}@example.com",
+        email_verified=email_verified,
         display_name=display_name,
+        photo_url=photo_url,
         disabled=disabled,
         custom_claims=custom_claims,
+        user_metadata=SimpleNamespace(
+            creation_timestamp=creation_timestamp,
+            last_sign_in_timestamp=last_sign_in_timestamp,
+        ),
     )
 
 

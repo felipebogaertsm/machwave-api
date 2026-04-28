@@ -128,6 +128,39 @@ class TestAdminListUsers:
         login_as(app, role="admin", uid=ADMIN_UID)
         assert client.get(f"/admin/users?max_results={max_results}").status_code == 422
 
+    def test_response_shape_includes_metadata_and_pagination(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_firebase: FakeFirebase,
+        fake_gcs: FakeGCS,
+    ) -> None:
+        login_as(app, role="admin", uid=ADMIN_UID)
+        body = client.get("/admin/users").json()
+
+        # Pagination flags exist; FakeFirebase returns no next_page_token.
+        assert body["has_more"] is False
+        assert body["next_page_token"] is None
+
+        # Each user carries the expanded metadata.
+        sample = body["users"][0]
+        for field in (
+            "uid",
+            "email",
+            "email_verified",
+            "display_name",
+            "photo_url",
+            "disabled",
+            "role",
+            "created_at",
+            "last_sign_in_at",
+        ):
+            assert field in sample, f"missing {field}"
+
+        # Timestamps are ISO datetimes (or None) — fixture seeds non-null.
+        assert sample["created_at"] is not None
+        assert sample["last_sign_in_at"] is not None
+
 
 # ---------------------------------------------------------------------------
 # Admin: set role
@@ -148,6 +181,13 @@ class TestAdminSetRole:
         assert resp.json()["role"] == "admin"
         assert fake_firebase.records[TARGET_UID].custom_claims == {"role": "admin"}
 
+        # Account limits should also flip to None so the storage shape stays
+        # consistent with the new role.
+        account = fake_gcs.blobs[f"users/{TARGET_UID}/account.json"]
+        assert account["motor_limit"] is None
+        assert account["simulation_limit"] is None
+        assert account["credits"]["monthly_token_limit"] is None
+
     def test_demote_admin_to_member_clears_role_claim(
         self,
         app: FastAPI,
@@ -166,6 +206,12 @@ class TestAdminSetRole:
         assert resp.status_code == 200
         assert resp.json()["role"] == "member"
         assert fake_firebase.records[TARGET_UID].custom_claims == {"other": "keep"}
+
+        # Demotion should restore config-default int limits.
+        account = fake_gcs.blobs[f"users/{TARGET_UID}/account.json"]
+        assert account["motor_limit"] == 10
+        assert account["simulation_limit"] == 10
+        assert account["credits"]["monthly_token_limit"] == 10_000
 
     def test_self_demotion_blocked(
         self,

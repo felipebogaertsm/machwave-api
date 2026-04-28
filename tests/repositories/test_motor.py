@@ -103,3 +103,72 @@ class TestMotorRepositoryRoundTrip:
         404 logic depends on ``get`` for existence, not on ``delete`` failing."""
         repo = MotorRepository()
         await repo.delete(USER_ID, "never-existed")
+
+
+class TestListAllUsersWithMotors:
+    @pytest.mark.asyncio
+    async def test_returns_distinct_user_ids(self, fake_gcs: FakeGCS) -> None:
+        repo = MotorRepository()
+        await repo.save("user-1", "m1", _motor_record("m1"))
+        await repo.save("user-1", "m2", _motor_record("m2"))
+        await repo.save("user-2", "m3", _motor_record("m3"))
+
+        assert await repo.list_all_users_with_motors() == ["user-1", "user-2"]
+
+    @pytest.mark.asyncio
+    async def test_empty_bucket_returns_empty(self, fake_gcs: FakeGCS) -> None:
+        repo = MotorRepository()
+        assert await repo.list_all_users_with_motors() == []
+
+    @pytest.mark.asyncio
+    async def test_ignores_non_motor_paths(self, fake_gcs: FakeGCS) -> None:
+        """Sibling subtrees (``simulations/``, ``profile.json``) live under the
+        same ``users/{uid}/`` umbrella but must not surface here."""
+        repo = MotorRepository()
+        await repo.save("user-1", "m1", _motor_record("m1"))
+        fake_gcs.blobs["users/user-2/simulations/sim-a/status.json"] = {"v": 1}
+        fake_gcs.blobs["users/user-3/profile.json"] = {"v": 1}
+
+        assert await repo.list_all_users_with_motors() == ["user-1"]
+
+
+class TestDeleteAllForUser:
+    @pytest.mark.asyncio
+    async def test_removes_every_motor_for_user_and_returns_count(self, fake_gcs: FakeGCS) -> None:
+        repo = MotorRepository()
+        await repo.save("user-1", "m1", _motor_record("m1"))
+        await repo.save("user-1", "m2", _motor_record("m2"))
+
+        deleted = await repo.delete_all_for_user("user-1")
+
+        assert deleted == 2
+        assert await repo.list("user-1") == []
+
+    @pytest.mark.asyncio
+    async def test_does_not_touch_other_users(self, fake_gcs: FakeGCS) -> None:
+        repo = MotorRepository()
+        await repo.save("user-1", "m1", _motor_record("m1"))
+        await repo.save("user-2", "m2", _motor_record("m2"))
+
+        await repo.delete_all_for_user("user-1")
+
+        assert {r.motor_id for r in await repo.list("user-2")} == {"m2"}
+
+    @pytest.mark.asyncio
+    async def test_does_not_touch_sibling_subtrees(self, fake_gcs: FakeGCS) -> None:
+        """Only the ``motors/`` subtree should be wiped — adjacent simulation
+        and profile blobs under the same user prefix must survive."""
+        repo = MotorRepository()
+        await repo.save("user-1", "m1", _motor_record("m1"))
+        fake_gcs.blobs["users/user-1/simulations/sim-a/status.json"] = {"v": 1}
+        fake_gcs.blobs["users/user-1/profile.json"] = {"v": 1}
+
+        await repo.delete_all_for_user("user-1")
+
+        assert "users/user-1/simulations/sim-a/status.json" in fake_gcs.blobs
+        assert "users/user-1/profile.json" in fake_gcs.blobs
+
+    @pytest.mark.asyncio
+    async def test_user_with_no_motors_returns_zero(self, fake_gcs: FakeGCS) -> None:
+        repo = MotorRepository()
+        assert await repo.delete_all_for_user("never-existed") == 0

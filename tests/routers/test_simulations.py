@@ -100,6 +100,7 @@ PROTECTED_ENDPOINTS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("GET", "/simulations/some-id/results", None),
     ("DELETE", "/simulations/some-id", None),
     ("POST", "/admin/simulations/rerun-all", None),
+    ("DELETE", "/admin/simulations/clear-all", None),
 ]
 
 
@@ -500,3 +501,119 @@ class TestRerunAllSimulations:
         resp = client.post("/admin/simulations/rerun-all")
         assert resp.status_code == 202
         assert resp.json() == {"triggered": 0, "simulation_ids": []}
+
+
+# ---------------------------------------------------------------------------
+# DELETE /admin/simulations/clear-all
+# ---------------------------------------------------------------------------
+
+
+class TestAdminClearAllSimulations:
+    def test_member_blocked(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_gcs: FakeGCS,
+        dispatch_recorder: DispatchRecorder,
+    ) -> None:
+        login_as(app, role="member", uid=MEMBER_UID)
+        _seed_simulation(fake_gcs, MEMBER_UID, "sim-1")
+        assert client.delete("/admin/simulations/clear-all").status_code == 403
+        # Nothing was wiped.
+        assert f"users/{MEMBER_UID}/simulations/sim-1/status.json" in fake_gcs.blobs
+
+    def test_admin_clears_every_users_simulations_when_unscoped(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_gcs: FakeGCS,
+        dispatch_recorder: DispatchRecorder,
+    ) -> None:
+        login_as(app, role="admin", uid=ADMIN_UID)
+        _seed_simulation(fake_gcs, "u1", "sim-a")
+        _seed_simulation(fake_gcs, "u1", "sim-b")
+        _seed_simulation(fake_gcs, "u2", "sim-c")
+
+        resp = client.delete("/admin/simulations/clear-all")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["deleted"] == 3
+        assert sorted(body["user_ids"]) == ["u1", "u2"]
+        assert not [k for k in fake_gcs.blobs if "/simulations/" in k]
+
+    def test_admin_clears_only_scoped_user(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_gcs: FakeGCS,
+        dispatch_recorder: DispatchRecorder,
+    ) -> None:
+        login_as(app, role="admin", uid=ADMIN_UID)
+        _seed_simulation(fake_gcs, MEMBER_UID, "mine-1")
+        _seed_simulation(fake_gcs, MEMBER_UID, "mine-2")
+        _seed_simulation(fake_gcs, OTHER_UID, "theirs")
+
+        resp = client.delete(f"/admin/simulations/clear-all?user_id={MEMBER_UID}")
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": 2, "user_ids": [MEMBER_UID]}
+        # Other user's simulations untouched.
+        assert f"users/{OTHER_UID}/simulations/theirs/status.json" in fake_gcs.blobs
+        assert not [k for k in fake_gcs.blobs if k.startswith(f"users/{MEMBER_UID}/simulations/")]
+
+    def test_admin_scoped_to_user_with_no_simulations_is_noop(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_gcs: FakeGCS,
+        dispatch_recorder: DispatchRecorder,
+    ) -> None:
+        login_as(app, role="admin", uid=ADMIN_UID)
+        _seed_simulation(fake_gcs, OTHER_UID, "untouched")
+
+        resp = client.delete("/admin/simulations/clear-all?user_id=ghost-uid")
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": 0, "user_ids": ["ghost-uid"]}
+        assert f"users/{OTHER_UID}/simulations/untouched/status.json" in fake_gcs.blobs
+
+    def test_admin_unscoped_with_no_simulations_returns_zero(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_gcs: FakeGCS,
+        dispatch_recorder: DispatchRecorder,
+    ) -> None:
+        login_as(app, role="admin", uid=ADMIN_UID)
+        resp = client.delete("/admin/simulations/clear-all")
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": 0, "user_ids": []}
+
+    def test_does_not_touch_motors(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_gcs: FakeGCS,
+        dispatch_recorder: DispatchRecorder,
+    ) -> None:
+        """Adjacent ``users/{uid}/motors/...`` data must survive — the
+        prefix delete is scoped to the simulations subtree."""
+        login_as(app, role="admin", uid=ADMIN_UID)
+        _seed_simulation(fake_gcs, MEMBER_UID, "sim-1")
+        fake_gcs.blobs[f"users/{MEMBER_UID}/motors/m1.json"] = {"v": 1}
+
+        assert client.delete("/admin/simulations/clear-all").status_code == 200
+        assert f"users/{MEMBER_UID}/motors/m1.json" in fake_gcs.blobs
+
+    def test_does_not_dispatch(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        fake_gcs: FakeGCS,
+        dispatch_recorder: DispatchRecorder,
+    ) -> None:
+        """clear-all is destructive only — no worker should be triggered, in
+        contrast to ``rerun-all`` which would re-fire each simulation."""
+        login_as(app, role="admin", uid=ADMIN_UID)
+        _seed_simulation(fake_gcs, MEMBER_UID, "sim-1")
+
+        assert client.delete("/admin/simulations/clear-all").status_code == 200
+        assert dispatch_recorder.calls == []

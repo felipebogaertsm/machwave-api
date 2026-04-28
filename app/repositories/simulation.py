@@ -134,3 +134,13 @@ class SimulationRepository(GCSRepository):
 
     async def delete(self, user_id: str, simulation_id: str) -> None:
         await self._delete(_simulation_dir(user_id, simulation_id))
+
+    async def list_all_users_with_simulations(self) -> list[str]:
+        pairs = await self.list_all_simulation_pairs()
+        return sorted({user_id for user_id, _ in pairs})
+
+    async def delete_all_for_user(self, user_id: str) -> int:
+        pairs = await self.list_all_simulation_pairs()
+        count = sum(1 for uid, _ in pairs if uid == user_id)
+        await self._delete(_simulations_prefix(user_id))
+        return count

@@ -6,14 +6,16 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.auth.firebase import get_current_user
+from app.auth.rbac import require_role
 from app.repositories.motor import MotorRepository
 from app.schemas.motor import MotorConfigSchema, MotorRecord, MotorSummary
 
 router = APIRouter()
+admin_router = APIRouter()
 
 
 class CreateMotorRequest(BaseModel):
@@ -28,6 +30,11 @@ class CreateMotorResponse(BaseModel):
 class UpdateMotorRequest(BaseModel):
     name: str | None = None
     config: MotorConfigSchema | None = None
+
+
+class ClearAllMotorsResponse(BaseModel):
+    deleted: int
+    user_ids: list[str]
 
 
 @router.post("", response_model=CreateMotorResponse, status_code=status.HTTP_201_CREATED)
@@ -110,3 +117,24 @@ async def delete_motor(
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Motor not found.")
     await repo.delete(user_id, motor_id)
+
+
+@admin_router.delete("/clear-all", response_model=ClearAllMotorsResponse)
+async def admin_clear_all_motors(
+    user_id: str | None = Query(default=None),
+    _: dict[str, Any] = Depends(require_role("admin")),
+    repo: MotorRepository = Depends(MotorRepository),
+) -> ClearAllMotorsResponse:
+    """Delete every motor record. Admin-only.
+
+    With ``user_id``, scoped to that user; without it, every user's motors
+    are wiped.
+    """
+    target_users = [user_id] if user_id is not None else await repo.list_all_users_with_motors()
+    deleted = 0
+    cleared: list[str] = []
+    for uid in target_users:
+        count = await repo.delete_all_for_user(uid)
+        deleted += count
+        cleared.append(uid)
+    return ClearAllMotorsResponse(deleted=deleted, user_ids=cleared)

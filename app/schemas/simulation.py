@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from app.schemas.motor import MotorConfigSchema
 
@@ -69,17 +69,70 @@ class SimulationJobConfig(BaseModel):
 # Status
 # ---------------------------------------------------------------------------
 
-SimulationStatus = Literal["pending", "running", "done", "failed"]
+SimulationStatus = Literal["pending", "running", "done", "failed", "retried"]
+
+
+class SimulationStatusEvent(BaseModel):
+    """A single transition in a simulation's lifecycle."""
+
+    status: SimulationStatus
+    error: str | None = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class SimulationStatusRecord(BaseModel):
-    """Status document stored at users/{user_id}/simulations/{simulation_id}/status.json."""
+    """Status document stored at users/{user_id}/simulations/{simulation_id}/status.json.
+
+    The record is an append-only event trail. ``status`` and timestamp accessors
+    are derived from the trail; the latest event is the current state.
+    """
 
     simulation_id: str
-    status: SimulationStatus = "pending"
-    error: str | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    events: list[SimulationStatusEvent] = Field(
+        default_factory=lambda: [SimulationStatusEvent(status="pending")]
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_status(cls, data: Any) -> Any:
+        # Old format stored {status, error, created_at, updated_at} flat; the
+        # convenience constructor SimulationStatusRecord(status=..., error=...)
+        # also goes through here. Both collapse into a single-event record.
+        if not isinstance(data, dict) or "events" in data:
+            return data
+        event_data: dict[str, Any] = {"status": data.pop("status", "pending")}
+        if (error := data.pop("error", None)) is not None:
+            event_data["error"] = error
+        if (created_at := data.pop("created_at", None)) is not None:
+            event_data["timestamp"] = created_at
+        data.pop("updated_at", None)
+        data["events"] = [event_data]
+        return data
+
+    def append(self, status: SimulationStatus, error: str | None = None) -> SimulationStatusEvent:
+        event = SimulationStatusEvent(status=status, error=error)
+        self.events.append(event)
+        return event
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def status(self) -> SimulationStatus:
+        return self.events[-1].status
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def error(self) -> str | None:
+        return self.events[-1].error
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def created_at(self) -> datetime:
+        return self.events[0].timestamp
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def updated_at(self) -> datetime:
+        return self.events[-1].timestamp
 
 
 # ---------------------------------------------------------------------------

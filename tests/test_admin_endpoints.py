@@ -66,9 +66,7 @@ class FakeFirebase:
         max_results: int = 1000,
         app: Any = None,
     ) -> SimpleNamespace:
-        self.list_calls.append(
-            {"page_token": page_token, "max_results": max_results, "app": app}
-        )
+        self.list_calls.append({"page_token": page_token, "max_results": max_results, "app": app})
         return SimpleNamespace(users=list(self.records.values()), next_page_token=None)
 
     def get_user(self, uid: str, app: Any = None) -> SimpleNamespace:
@@ -311,18 +309,14 @@ class TestAdminSetRole:
 
 
 class TestAdminSetDisabled:
-    def test_disable_user(
-        self, app: FastAPI, client: TestClient, fake_fb: FakeFirebase
-    ) -> None:
+    def test_disable_user(self, app: FastAPI, client: TestClient, fake_fb: FakeFirebase) -> None:
         _login_as(app, role="admin")
         resp = client.put(f"/admin/users/{TARGET_UID}/disabled", json={"disabled": True})
         assert resp.status_code == 200
         assert resp.json()["disabled"] is True
         assert fake_fb.records[TARGET_UID].disabled is True
 
-    def test_enable_user(
-        self, app: FastAPI, client: TestClient, fake_fb: FakeFirebase
-    ) -> None:
+    def test_enable_user(self, app: FastAPI, client: TestClient, fake_fb: FakeFirebase) -> None:
         _login_as(app, role="admin")
         fake_fb.records[TARGET_UID].disabled = True
         resp = client.put(f"/admin/users/{TARGET_UID}/disabled", json={"disabled": False})

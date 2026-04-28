@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.motor import SolidMotorConfigSchema
+from app.schemas.motor import MotorConfigSchema
 
 
 class IBSimParamsSchema(BaseModel):
@@ -60,7 +60,7 @@ class SimulationJobConfig(BaseModel):
     simulation_id: str
     user_id: str
     motor_id: str
-    motor_config: SolidMotorConfigSchema
+    motor_config: MotorConfigSchema
     params: IBSimParamsSchema
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -82,9 +82,23 @@ class SimulationStatusRecord(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
-class SimulationResultsSchema(BaseModel):
+# ---------------------------------------------------------------------------
+# Results — one schema per motor type, discriminated on ``motor_type``
+# ---------------------------------------------------------------------------
+
+
+def _to_list(arr) -> list[float]:  # noqa: ANN001
+    return [float(v) for v in np.asarray(arr)]
+
+
+def _to_nested_list(arr) -> list:  # noqa: ANN001, ANN401
+    return np.asarray(arr).tolist()
+
+
+class SolidSimulationResultsSchema(BaseModel):
     """Serialised time-series results from a completed SRM simulation."""
 
+    motor_type: Literal["solid"] = "solid"
     simulation_id: str
 
     # Time-series arrays
@@ -136,15 +150,8 @@ class SimulationResultsSchema(BaseModel):
     burn_profile: str = Field(description="Burn profile: regressive / neutral / progressive")
 
     @classmethod
-    def from_machwave(cls, simulation_id: str, motor_state) -> SimulationResultsSchema:  # noqa: ANN001
+    def from_machwave(cls, simulation_id: str, motor_state) -> SolidSimulationResultsSchema:  # noqa: ANN001
         """Build from a machwave ``SolidMotorState`` after simulation.run()."""
-
-        def _to_list(arr) -> list[float]:  # noqa: ANN001
-            return [float(v) for v in np.asarray(arr)]
-
-        def _to_nested_list(arr) -> list:  # noqa: ANN001, ANN401
-            return np.asarray(arr).tolist()
-
         return cls(
             simulation_id=simulation_id,
             t=_to_list(motor_state.t),
@@ -188,12 +195,94 @@ class SimulationResultsSchema(BaseModel):
         )
 
 
+class LiquidSimulationResultsSchema(BaseModel):
+    """Serialised time-series results from a completed LRE simulation."""
+
+    motor_type: Literal["liquid"] = "liquid"
+    simulation_id: str
+
+    # Time-series arrays
+    t: list[float] = Field(description="Time [s]")
+    thrust: list[float] = Field(description="Thrust [N]")
+    P_0: list[float] = Field(description="Chamber stagnation pressure [Pa]")
+    P_exit: list[float] = Field(description="Nozzle exit pressure [Pa]")
+    m_prop: list[float] = Field(description="Total propellant mass remaining [kg]")
+    fuel_mass: list[float] = Field(description="Fuel mass remaining [kg]")
+    oxidizer_mass: list[float] = Field(description="Oxidizer mass remaining [kg]")
+    fuel_tank_pressure: list[float] = Field(description="Fuel tank pressure [Pa]")
+    oxidizer_tank_pressure: list[float] = Field(description="Oxidizer tank pressure [Pa]")
+    C_f: list[float] = Field(description="Thrust coefficient (corrected) [-]")
+    C_f_ideal: list[float] = Field(description="Ideal thrust coefficient [-]")
+    n_cf: list[float] = Field(description="Thrust coefficient correction factor [-]")
+
+    # Scalar summary metrics
+    total_impulse: float = Field(description="Total impulse [N·s]")
+    specific_impulse: float = Field(description="Specific impulse [s]")
+    thrust_time: float = Field(description="Total thrust time [s]")
+    burn_time: float | None = Field(
+        default=None,
+        description="Time at which a propellant tank emptied [s], if reached",
+    )
+    max_thrust: float = Field(description="Peak thrust [N]")
+    avg_thrust: float = Field(description="Average thrust [N]")
+    max_chamber_pressure: float = Field(description="Peak chamber pressure [Pa]")
+    avg_chamber_pressure: float = Field(description="Average chamber pressure [Pa]")
+    initial_propellant_mass: float = Field(description="Initial propellant mass [kg]")
+    initial_oxidizer_mass: float = Field(description="Initial oxidizer mass [kg]")
+    initial_fuel_mass: float = Field(description="Initial fuel mass [kg]")
+    of_ratio: float = Field(description="Oxidizer-to-fuel mass ratio [-]")
+
+    @classmethod
+    def from_machwave(cls, simulation_id: str, motor_state) -> LiquidSimulationResultsSchema:  # noqa: ANN001
+        """Build from a machwave ``LiquidEngineState`` after simulation.run()."""
+        thrust = np.asarray(motor_state.thrust)
+        t = np.asarray(motor_state.t)
+        m_prop_initial = float(motor_state.m_prop[0])
+        total_impulse = float(np.trapezoid(thrust, t))
+        specific_impulse = total_impulse / (m_prop_initial * 9.81) if m_prop_initial > 0 else 0.0
+        burn_time = getattr(motor_state, "burn_time", None)
+
+        return cls(
+            simulation_id=simulation_id,
+            t=_to_list(motor_state.t),
+            thrust=_to_list(motor_state.thrust),
+            P_0=_to_list(motor_state.P_0),
+            P_exit=_to_list(motor_state.P_exit),
+            m_prop=_to_list(motor_state.m_prop),
+            fuel_mass=_to_list(motor_state.fuel_mass),
+            oxidizer_mass=_to_list(motor_state.oxidizer_mass),
+            fuel_tank_pressure=_to_list(motor_state.fuel_tank_pressure),
+            oxidizer_tank_pressure=_to_list(motor_state.oxidizer_tank_pressure),
+            C_f=_to_list(motor_state.C_f),
+            C_f_ideal=_to_list(motor_state.C_f_ideal),
+            n_cf=_to_list(motor_state.n_cf),
+            total_impulse=total_impulse,
+            specific_impulse=specific_impulse,
+            thrust_time=float(motor_state.thrust_time),
+            burn_time=float(burn_time) if burn_time is not None else None,
+            max_thrust=float(np.max(thrust)),
+            avg_thrust=float(np.mean(thrust)),
+            max_chamber_pressure=float(np.max(motor_state.P_0)),
+            avg_chamber_pressure=float(np.mean(motor_state.P_0)),
+            initial_propellant_mass=m_prop_initial,
+            initial_oxidizer_mass=float(motor_state.oxidizer_mass[0]),
+            initial_fuel_mass=float(motor_state.fuel_mass[0]),
+            of_ratio=float(motor_state.motor.propellant.of_ratio),
+        )
+
+
+SimulationResultsSchema = Annotated[
+    SolidSimulationResultsSchema | LiquidSimulationResultsSchema,
+    Field(discriminator="motor_type"),
+]
+
+
 class SimulationDetailsResponse(BaseModel):
     """Full simulation payload for the frontend: results + the inputs that produced them."""
 
     simulation_id: str
     motor_id: str
-    motor_config: SolidMotorConfigSchema
+    motor_config: MotorConfigSchema
     params: IBSimParamsSchema
     results: SimulationResultsSchema
 
@@ -203,6 +292,7 @@ class SimulationSummary(BaseModel):
 
     simulation_id: str
     motor_id: str
+    motor_type: Literal["solid", "liquid"]
     status: SimulationStatus
     created_at: datetime
     updated_at: datetime

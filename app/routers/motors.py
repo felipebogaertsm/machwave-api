@@ -11,14 +11,14 @@ from pydantic import BaseModel
 
 from app.auth.firebase import get_current_user
 from app.repositories.motor import MotorRepository
-from app.schemas.motor import MotorRecord, MotorSummary, SolidMotorConfigSchema
+from app.schemas.motor import MotorConfigSchema, MotorRecord, MotorSummary
 
 router = APIRouter()
 
 
 class CreateMotorRequest(BaseModel):
     name: str
-    config: SolidMotorConfigSchema
+    config: MotorConfigSchema
 
 
 class CreateMotorResponse(BaseModel):
@@ -27,7 +27,7 @@ class CreateMotorResponse(BaseModel):
 
 class UpdateMotorRequest(BaseModel):
     name: str | None = None
-    config: SolidMotorConfigSchema | None = None
+    config: MotorConfigSchema | None = None
 
 
 @router.post("", response_model=CreateMotorResponse, status_code=status.HTTP_201_CREATED)
@@ -54,6 +54,7 @@ async def list_motors(
         MotorSummary(
             motor_id=r.motor_id,
             name=r.name,
+            motor_type=r.config.motor_type,
             created_at=r.created_at,
             updated_at=r.updated_at,
         )

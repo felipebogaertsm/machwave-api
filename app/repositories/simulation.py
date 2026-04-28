@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import logging
 
+from pydantic import TypeAdapter
+
 from app.repositories.base import GCSRepository
 from app.schemas.simulation import (
+    LiquidSimulationResultsSchema,
     SimulationJobConfig,
     SimulationResultsSchema,
     SimulationStatusRecord,
     SimulationSummary,
+    SolidSimulationResultsSchema,
 )
 
 logger = logging.getLogger(__name__)
+
+_RESULTS_ADAPTER: TypeAdapter[SimulationResultsSchema] = TypeAdapter(SimulationResultsSchema)
 
 
 def _simulations_prefix(user_id: str) -> str:
@@ -75,6 +81,7 @@ class SimulationRepository(GCSRepository):
                     SimulationSummary(
                         simulation_id=simulation_id,
                         motor_id=job_config.motor_id,
+                        motor_type=job_config.motor_config.motor_type,
                         status=status_record.status,
                         created_at=status_record.created_at,
                         updated_at=status_record.updated_at,
@@ -99,11 +106,13 @@ class SimulationRepository(GCSRepository):
             return None
         return SimulationStatusRecord.model_validate(data)
 
-    async def get_results(self, user_id: str, simulation_id: str) -> SimulationResultsSchema | None:
+    async def get_results(
+        self, user_id: str, simulation_id: str
+    ) -> SolidSimulationResultsSchema | LiquidSimulationResultsSchema | None:
         data = await self._read(_results_blob(user_id, simulation_id))
         if data is None:
             return None
-        return SimulationResultsSchema.model_validate(data)
+        return _RESULTS_ADAPTER.validate_python(data)
 
     async def save_config(
         self, user_id: str, simulation_id: str, config: SimulationJobConfig
@@ -116,7 +125,10 @@ class SimulationRepository(GCSRepository):
         await self._write(_status_blob(user_id, simulation_id), record.model_dump(mode="json"))
 
     async def save_results(
-        self, user_id: str, simulation_id: str, results: SimulationResultsSchema
+        self,
+        user_id: str,
+        simulation_id: str,
+        results: SolidSimulationResultsSchema | LiquidSimulationResultsSchema,
     ) -> None:
         await self._write(_results_blob(user_id, simulation_id), results.model_dump(mode="json"))
 

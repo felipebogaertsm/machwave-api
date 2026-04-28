@@ -190,3 +190,74 @@ class TestListAllSimulationPairs:
     async def test_empty_bucket_returns_empty(self, fake_gcs: FakeGCS) -> None:
         repo = SimulationRepository()
         assert await repo.list_all_simulation_pairs() == []
+
+
+class TestListAllUsersWithSimulations:
+    @pytest.mark.asyncio
+    async def test_returns_distinct_user_ids(self, fake_gcs: FakeGCS) -> None:
+        repo = SimulationRepository()
+        await repo.save_config("u1", "sim-a", _job_config("u1", "sim-a"))
+        await repo.save_config("u1", "sim-b", _job_config("u1", "sim-b"))
+        await repo.save_config("u2", "sim-c", _job_config("u2", "sim-c"))
+
+        assert await repo.list_all_users_with_simulations() == ["u1", "u2"]
+
+    @pytest.mark.asyncio
+    async def test_empty_bucket_returns_empty(self, fake_gcs: FakeGCS) -> None:
+        repo = SimulationRepository()
+        assert await repo.list_all_users_with_simulations() == []
+
+    @pytest.mark.asyncio
+    async def test_ignores_users_with_only_motors(self, fake_gcs: FakeGCS) -> None:
+        repo = SimulationRepository()
+        fake_gcs.blobs["users/u-motors-only/motors/m1.json"] = {"v": 1}
+        await repo.save_config("u-with-sim", "sim-a", _job_config("u-with-sim", "sim-a"))
+
+        assert await repo.list_all_users_with_simulations() == ["u-with-sim"]
+
+
+class TestDeleteAllForUser:
+    @pytest.mark.asyncio
+    async def test_removes_every_simulation_for_user_and_returns_count(
+        self, fake_gcs: FakeGCS
+    ) -> None:
+        repo = SimulationRepository()
+        await repo.save_config("u1", "sim-a", _job_config("u1", "sim-a"))
+        await repo.save_status("u1", "sim-a", SimulationStatusRecord(simulation_id="sim-a"))
+        await repo.save_config("u1", "sim-b", _job_config("u1", "sim-b"))
+
+        deleted = await repo.delete_all_for_user("u1")
+
+        assert deleted == 2
+        # Nothing left under the simulations subtree.
+        assert not [k for k in fake_gcs.blobs if k.startswith("users/u1/simulations/")]
+
+    @pytest.mark.asyncio
+    async def test_does_not_touch_other_users(self, fake_gcs: FakeGCS) -> None:
+        repo = SimulationRepository()
+        await repo.save_config("u1", "sim-a", _job_config("u1", "sim-a"))
+        await repo.save_config("u2", "sim-b", _job_config("u2", "sim-b"))
+        await repo.save_status("u2", "sim-b", SimulationStatusRecord(simulation_id="sim-b"))
+
+        await repo.delete_all_for_user("u1")
+
+        assert await repo.get_config("u2", "sim-b") is not None
+
+    @pytest.mark.asyncio
+    async def test_does_not_touch_sibling_subtrees(self, fake_gcs: FakeGCS) -> None:
+        """Only the ``simulations/`` subtree should be wiped — motors and
+        profile blobs under the same user prefix must survive."""
+        repo = SimulationRepository()
+        await repo.save_config("u1", "sim-a", _job_config("u1", "sim-a"))
+        fake_gcs.blobs["users/u1/motors/m1.json"] = {"v": 1}
+        fake_gcs.blobs["users/u1/profile.json"] = {"v": 1}
+
+        await repo.delete_all_for_user("u1")
+
+        assert "users/u1/motors/m1.json" in fake_gcs.blobs
+        assert "users/u1/profile.json" in fake_gcs.blobs
+
+    @pytest.mark.asyncio
+    async def test_user_with_no_simulations_returns_zero(self, fake_gcs: FakeGCS) -> None:
+        repo = SimulationRepository()
+        assert await repo.delete_all_for_user("never-existed") == 0

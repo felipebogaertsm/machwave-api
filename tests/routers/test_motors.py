@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.schemas.motor import BILIQUID_FORMULATIONS, SOLID_FORMULATIONS
-from tests.conftest import MEMBER_UID, FakeGCS, login_as, logout
+from tests.conftest import ADMIN_UID, MEMBER_UID, FakeGCS, login_as, logout
 
 OTHER_UID = "other-user-uid"
 
@@ -101,6 +101,7 @@ PROTECTED_ENDPOINTS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("GET", "/motors/some-id", None),
     ("PUT", "/motors/some-id", {"name": "x"}),
     ("DELETE", "/motors/some-id", None),
+    ("DELETE", "/admin/motors/clear-all", None),
 ]
 
 
@@ -328,3 +329,88 @@ class TestDeleteMotor:
         }
         assert client.delete("/motors/sneaky").status_code == 404
         assert f"users/{OTHER_UID}/motors/sneaky.json" in fake_gcs.blobs
+
+
+# ---------------------------------------------------------------------------
+# DELETE /admin/motors/clear-all
+# ---------------------------------------------------------------------------
+
+
+def _seed_motor_blob(fake_gcs: FakeGCS, user_id: str, motor_id: str) -> None:
+    """Drop a minimally valid motor blob — clear-all only needs the path,
+    not a parseable body, so the cheaper dict avoids dragging the full
+    schema fixture into every assertion."""
+    fake_gcs.blobs[f"users/{user_id}/motors/{motor_id}.json"] = {
+        "motor_id": motor_id,
+        "name": motor_id,
+        "config": _solid_config(),
+    }
+
+
+class TestAdminClearAllMotors:
+    def test_member_blocked(self, app: FastAPI, client: TestClient, fake_gcs: FakeGCS) -> None:
+        login_as(app, role="member", uid=MEMBER_UID)
+        _seed_motor_blob(fake_gcs, MEMBER_UID, "m1")
+        assert client.delete("/admin/motors/clear-all").status_code == 403
+        assert f"users/{MEMBER_UID}/motors/m1.json" in fake_gcs.blobs
+
+    def test_admin_clears_every_users_motors_when_unscoped(
+        self, app: FastAPI, client: TestClient, fake_gcs: FakeGCS
+    ) -> None:
+        login_as(app, role="admin", uid=ADMIN_UID)
+        _seed_motor_blob(fake_gcs, MEMBER_UID, "m1")
+        _seed_motor_blob(fake_gcs, MEMBER_UID, "m2")
+        _seed_motor_blob(fake_gcs, OTHER_UID, "m3")
+
+        resp = client.delete("/admin/motors/clear-all")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["deleted"] == 3
+        assert sorted(body["user_ids"]) == sorted([MEMBER_UID, OTHER_UID])
+        assert not [k for k in fake_gcs.blobs if "/motors/" in k]
+
+    def test_admin_clears_only_scoped_user(
+        self, app: FastAPI, client: TestClient, fake_gcs: FakeGCS
+    ) -> None:
+        login_as(app, role="admin", uid=ADMIN_UID)
+        _seed_motor_blob(fake_gcs, MEMBER_UID, "mine-1")
+        _seed_motor_blob(fake_gcs, MEMBER_UID, "mine-2")
+        _seed_motor_blob(fake_gcs, OTHER_UID, "theirs")
+
+        resp = client.delete(f"/admin/motors/clear-all?user_id={MEMBER_UID}")
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": 2, "user_ids": [MEMBER_UID]}
+        # Other user's motors untouched.
+        assert f"users/{OTHER_UID}/motors/theirs.json" in fake_gcs.blobs
+        assert not [k for k in fake_gcs.blobs if k.startswith(f"users/{MEMBER_UID}/motors/")]
+
+    def test_admin_scoped_to_user_with_no_motors_is_noop(
+        self, app: FastAPI, client: TestClient, fake_gcs: FakeGCS
+    ) -> None:
+        login_as(app, role="admin", uid=ADMIN_UID)
+        _seed_motor_blob(fake_gcs, OTHER_UID, "untouched")
+
+        resp = client.delete("/admin/motors/clear-all?user_id=ghost-uid")
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": 0, "user_ids": ["ghost-uid"]}
+        assert f"users/{OTHER_UID}/motors/untouched.json" in fake_gcs.blobs
+
+    def test_admin_unscoped_with_no_motors_returns_zero(
+        self, app: FastAPI, client: TestClient, fake_gcs: FakeGCS
+    ) -> None:
+        login_as(app, role="admin", uid=ADMIN_UID)
+        resp = client.delete("/admin/motors/clear-all")
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": 0, "user_ids": []}
+
+    def test_does_not_touch_simulations(
+        self, app: FastAPI, client: TestClient, fake_gcs: FakeGCS
+    ) -> None:
+        """Adjacent ``users/{uid}/simulations/...`` data must survive — the
+        prefix delete is scoped to the motors subtree."""
+        login_as(app, role="admin", uid=ADMIN_UID)
+        _seed_motor_blob(fake_gcs, MEMBER_UID, "m1")
+        fake_gcs.blobs[f"users/{MEMBER_UID}/simulations/sim-1/status.json"] = {"v": 1}
+
+        assert client.delete("/admin/motors/clear-all").status_code == 200
+        assert f"users/{MEMBER_UID}/simulations/sim-1/status.json" in fake_gcs.blobs

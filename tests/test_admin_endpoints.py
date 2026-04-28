@@ -30,6 +30,8 @@ from firebase_admin import auth as firebase_auth  # noqa: E402
 import app.routers.users as users_module  # noqa: E402
 from app.auth.firebase import get_current_user, get_firebase_app  # noqa: E402
 from app.main import create_app  # noqa: E402
+from app.repositories.motor import MotorRepository  # noqa: E402
+from app.repositories.simulation import SimulationRepository  # noqa: E402
 
 ADMIN_UID = "admin-uid"
 MEMBER_UID = "member-uid"
@@ -111,11 +113,54 @@ def gcs_deletes() -> list[str]:
     return []
 
 
+class FakeMotorRepository:
+    """In-memory stand-in for ``MotorRepository`` exercised by admin clear-all tests."""
+
+    def __init__(self, motors_by_user: dict[str, int] | None = None) -> None:
+        # Maps user_id -> motor count. Just counts; full records aren't needed here.
+        self.motors_by_user: dict[str, int] = dict(motors_by_user or {})
+        self.cleared: list[str] = []
+
+    async def list_all_users_with_motors(self) -> list[str]:
+        return sorted(self.motors_by_user)
+
+    async def delete_all_for_user(self, user_id: str) -> int:
+        self.cleared.append(user_id)
+        return self.motors_by_user.pop(user_id, 0)
+
+
+class FakeSimulationRepository:
+    """In-memory stand-in for ``SimulationRepository`` exercised by admin clear-all tests."""
+
+    def __init__(self, sims_by_user: dict[str, int] | None = None) -> None:
+        self.sims_by_user: dict[str, int] = dict(sims_by_user or {})
+        self.cleared: list[str] = []
+
+    async def list_all_users_with_simulations(self) -> list[str]:
+        return sorted(self.sims_by_user)
+
+    async def delete_all_for_user(self, user_id: str) -> int:
+        self.cleared.append(user_id)
+        return self.sims_by_user.pop(user_id, 0)
+
+
+@pytest.fixture()
+def fake_motor_repo() -> FakeMotorRepository:
+    return FakeMotorRepository(motors_by_user={MEMBER_UID: 3, TARGET_UID: 2})
+
+
+@pytest.fixture()
+def fake_sim_repo() -> FakeSimulationRepository:
+    return FakeSimulationRepository(sims_by_user={MEMBER_UID: 5, TARGET_UID: 1})
+
+
 @pytest.fixture()
 def app(
     monkeypatch: pytest.MonkeyPatch,
     fake_fb: FakeFirebase,
     gcs_deletes: list[str],
+    fake_motor_repo: FakeMotorRepository,
+    fake_sim_repo: FakeSimulationRepository,
 ) -> Iterator[FastAPI]:
     """FastAPI app with Firebase + GCS stubbed and a dummy firebase_admin.App injected."""
     monkeypatch.setattr(users_module.firebase_auth, "list_users", fake_fb.list_users)
@@ -133,6 +178,8 @@ def app(
 
     application = create_app()
     application.dependency_overrides[get_firebase_app] = lambda: object()
+    application.dependency_overrides[MotorRepository] = lambda: fake_motor_repo
+    application.dependency_overrides[SimulationRepository] = lambda: fake_sim_repo
     yield application
     application.dependency_overrides.clear()
 
@@ -169,6 +216,8 @@ ADMIN_ENDPOINTS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("PUT", f"/admin/users/{TARGET_UID}/disabled", {"disabled": True}),
     ("DELETE", f"/admin/users/{TARGET_UID}", None),
     ("POST", "/admin/simulations/rerun-all", None),
+    ("DELETE", "/admin/motors/clear-all", None),
+    ("DELETE", "/admin/simulations/clear-all", None),
 ]
 
 
@@ -418,3 +467,85 @@ class TestSelfServiceIsolation:
         resp = client.delete(f"/users/{TARGET_UID}/clear")
         assert resp.status_code == 403
         assert gcs_deletes == []
+
+
+class TestAdminClearAllMotors:
+    def test_clears_all_users_when_unscoped(
+        self, app: FastAPI, client: TestClient, fake_motor_repo: FakeMotorRepository
+    ) -> None:
+        _login_as(app, role="admin")
+        resp = client.delete("/admin/motors/clear-all")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["deleted"] == 5  # 3 + 2 across the seeded users
+        assert sorted(body["user_ids"]) == sorted([MEMBER_UID, TARGET_UID])
+        assert sorted(fake_motor_repo.cleared) == sorted([MEMBER_UID, TARGET_UID])
+        assert fake_motor_repo.motors_by_user == {}
+
+    def test_scoped_to_single_user(
+        self, app: FastAPI, client: TestClient, fake_motor_repo: FakeMotorRepository
+    ) -> None:
+        _login_as(app, role="admin")
+        resp = client.delete(f"/admin/motors/clear-all?user_id={TARGET_UID}")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["deleted"] == 2
+        assert body["user_ids"] == [TARGET_UID]
+        assert fake_motor_repo.cleared == [TARGET_UID]
+        # The other user's motors stay intact.
+        assert fake_motor_repo.motors_by_user == {MEMBER_UID: 3}
+
+    def test_scoped_to_user_with_no_motors_returns_zero(
+        self, app: FastAPI, client: TestClient, fake_motor_repo: FakeMotorRepository
+    ) -> None:
+        _login_as(app, role="admin")
+        resp = client.delete("/admin/motors/clear-all?user_id=ghost-uid")
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": 0, "user_ids": ["ghost-uid"]}
+        # Original users are untouched.
+        assert fake_motor_repo.motors_by_user == {MEMBER_UID: 3, TARGET_UID: 2}
+
+    def test_unscoped_with_no_motors_in_bucket_is_noop(
+        self, app: FastAPI, client: TestClient, fake_motor_repo: FakeMotorRepository
+    ) -> None:
+        _login_as(app, role="admin")
+        fake_motor_repo.motors_by_user.clear()
+        resp = client.delete("/admin/motors/clear-all")
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": 0, "user_ids": []}
+        assert fake_motor_repo.cleared == []
+
+
+class TestAdminClearAllSimulations:
+    def test_clears_all_users_when_unscoped(
+        self, app: FastAPI, client: TestClient, fake_sim_repo: FakeSimulationRepository
+    ) -> None:
+        _login_as(app, role="admin")
+        resp = client.delete("/admin/simulations/clear-all")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["deleted"] == 6  # 5 + 1 across the seeded users
+        assert sorted(body["user_ids"]) == sorted([MEMBER_UID, TARGET_UID])
+        assert sorted(fake_sim_repo.cleared) == sorted([MEMBER_UID, TARGET_UID])
+        assert fake_sim_repo.sims_by_user == {}
+
+    def test_scoped_to_single_user(
+        self, app: FastAPI, client: TestClient, fake_sim_repo: FakeSimulationRepository
+    ) -> None:
+        _login_as(app, role="admin")
+        resp = client.delete(f"/admin/simulations/clear-all?user_id={MEMBER_UID}")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["deleted"] == 5
+        assert body["user_ids"] == [MEMBER_UID]
+        assert fake_sim_repo.cleared == [MEMBER_UID]
+        assert fake_sim_repo.sims_by_user == {TARGET_UID: 1}
+
+    def test_scoped_to_user_with_no_simulations_returns_zero(
+        self, app: FastAPI, client: TestClient, fake_sim_repo: FakeSimulationRepository
+    ) -> None:
+        _login_as(app, role="admin")
+        resp = client.delete("/admin/simulations/clear-all?user_id=ghost-uid")
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": 0, "user_ids": ["ghost-uid"]}
+        assert fake_sim_repo.sims_by_user == {MEMBER_UID: 5, TARGET_UID: 1}

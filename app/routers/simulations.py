@@ -6,7 +6,7 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.auth.firebase import get_current_user
@@ -40,6 +40,11 @@ class CreateSimulationResponse(BaseModel):
 class RerunAllResponse(BaseModel):
     triggered: int
     simulation_ids: list[str]
+
+
+class ClearAllSimulationsResponse(BaseModel):
+    deleted: int
+    user_ids: list[str]
 
 
 @router.post("", response_model=CreateSimulationResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -102,6 +107,29 @@ async def rerun_all_simulations(
         await trigger_simulation(simulation_id, user_id)
         triggered.append(simulation_id)
     return RerunAllResponse(triggered=len(triggered), simulation_ids=triggered)
+
+
+@admin_router.delete("/clear-all", response_model=ClearAllSimulationsResponse)
+async def admin_clear_all_simulations(
+    user_id: str | None = Query(default=None),
+    _: dict[str, Any] = Depends(require_role("admin")),
+    repo: SimulationRepository = Depends(SimulationRepository),
+) -> ClearAllSimulationsResponse:
+    """Delete every simulation record. Admin-only.
+
+    With ``user_id``, scoped to that user; without it, every user's
+    simulations are wiped.
+    """
+    target_users = (
+        [user_id] if user_id is not None else await repo.list_all_users_with_simulations()
+    )
+    deleted = 0
+    cleared: list[str] = []
+    for uid in target_users:
+        count = await repo.delete_all_for_user(uid)
+        deleted += count
+        cleared.append(uid)
+    return ClearAllSimulationsResponse(deleted=deleted, user_ids=cleared)
 
 
 @router.get("", response_model=list[SimulationSummary])

@@ -42,3 +42,19 @@ class MotorRepository(GCSRepository):
 
     async def delete(self, user_id: str, motor_id: str) -> None:
         await self._delete(_motor_blob(user_id, motor_id))
+
+    async def list_all_users_with_motors(self) -> list[str]:
+        all_blobs = await self._list("users/")
+        users: set[str] = set()
+        for blob_name in all_blobs:
+            # Path: users/{user_id}/motors/{motor_id}.json
+            parts = blob_name.split("/")
+            if len(parts) >= 4 and parts[0] == "users" and parts[2] == "motors":
+                users.add(parts[1])
+        return sorted(users)
+
+    async def delete_all_for_user(self, user_id: str) -> int:
+        blobs = await self._list(_motors_prefix(user_id))
+        count = sum(1 for b in blobs if b.endswith(".json"))
+        await self._delete(_motors_prefix(user_id))
+        return count

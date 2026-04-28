@@ -42,6 +42,7 @@ def create_app() -> FastAPI:
     application.include_router(simulations.router, prefix="/simulations", tags=["simulations"])
     application.include_router(users.router, prefix="/users", tags=["users"])
     application.include_router(users.admin_router, prefix="/admin/users", tags=["admin"])
+    application.include_router(motors.admin_router, prefix="/admin/motors", tags=["admin"])
     application.include_router(
         simulations.admin_router, prefix="/admin/simulations", tags=["admin"]
     )

@@ -23,11 +23,23 @@ from tests.conftest import FakeGCS  # noqa: F401
 
 
 class DispatchRecorder:
+    """Captures ``trigger_simulation`` calls.
+
+    ``calls`` keeps the legacy ``(simulation_id, owner_id)`` shape for
+    user-scoped tests; ``team_calls`` records team-scoped invocations as
+    ``(simulation_id, team_id)`` so callers can assert the dispatch went to
+    the right pool.
+    """
+
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+        self.team_calls: list[tuple[str, str]] = []
 
-    async def trigger(self, simulation_id: str, user_id: str) -> None:
-        self.calls.append((simulation_id, user_id))
+    async def trigger(self, simulation_id: str, owner_id: str, owner_kind: str = "user") -> None:
+        if owner_kind == "team":
+            self.team_calls.append((simulation_id, owner_id))
+        else:
+            self.calls.append((simulation_id, owner_id))
 
 
 @pytest.fixture()
@@ -35,11 +47,13 @@ def dispatch_recorder(monkeypatch: pytest.MonkeyPatch) -> Iterator[DispatchRecor
     recorder = DispatchRecorder()
     monkeypatch.setattr(dispatch_module, "trigger_simulation", recorder.trigger)
 
-    # The simulations router imported the symbol at module load time, so we
-    # also patch the router's reference to it.
+    # Each router imports the symbol at module load time, so patch every
+    # router's local reference too.
     import app.routers.simulations as simulations_router_module
+    import app.routers.team_simulations as team_simulations_router_module
 
     monkeypatch.setattr(simulations_router_module, "trigger_simulation", recorder.trigger)
+    monkeypatch.setattr(team_simulations_router_module, "trigger_simulation", recorder.trigger)
     yield recorder
 
 

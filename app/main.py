@@ -8,7 +8,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.middleware.request_logging import LoggingMiddleware
-from app.routers import motors, propellants, simulations, usage, users
+from app.routers import (
+    motors,
+    propellants,
+    simulations,
+    team_motors,
+    team_simulations,
+    teams,
+    usage,
+    users,
+)
 
 
 @asynccontextmanager
@@ -42,12 +51,23 @@ def create_app() -> FastAPI:
     application.include_router(simulations.router, prefix="/simulations", tags=["simulations"])
     application.include_router(users.router, prefix="/users", tags=["users"])
     application.include_router(usage.router, tags=["usage"])
+    application.include_router(teams.router, prefix="/teams", tags=["teams"])
+    application.include_router(
+        team_motors.router, prefix="/teams/{team_id}/motors", tags=["team-motors"]
+    )
+    application.include_router(
+        team_simulations.router,
+        prefix="/teams/{team_id}/simulations",
+        tags=["team-simulations"],
+    )
+    application.include_router(teams.invites_router, prefix="/invites", tags=["invites"])
     application.include_router(usage.admin_router, prefix="/admin/users", tags=["admin"])
     application.include_router(users.admin_router, prefix="/admin/users", tags=["admin"])
     application.include_router(motors.admin_router, prefix="/admin/motors", tags=["admin"])
     application.include_router(
         simulations.admin_router, prefix="/admin/simulations", tags=["admin"]
     )
+    application.include_router(teams.admin_router, prefix="/admin/teams", tags=["admin"])
 
     @application.get("/health", tags=["health"])
     async def health() -> dict[str, str]:

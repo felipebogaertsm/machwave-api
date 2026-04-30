@@ -14,6 +14,7 @@ exposes the derived value without requiring it to be persisted.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
@@ -101,9 +102,12 @@ class UserAccount(BaseModel):
 class SimulationCostRecord(BaseModel):
     """Per-simulation cost ledger.
 
-    Stored at ``users/{uid}/simulations/{sid}/cost.json``. ``estimated_tokens``
-    is set at submit; the worker fills in ``actual_tokens``, ``iterations``,
-    and the final ``tokens_charged`` once the run completes.
+    Stored at ``users/{uid}/simulations/{sid}/cost.json`` (or
+    ``teams/{tid}/...`` for team simulations). ``estimated_tokens`` is set at
+    submit; the worker fills in ``actual_tokens``, ``iterations``, and the
+    final ``tokens_charged`` once the run completes. ``charged_to`` tells the
+    worker which pool to refund on failure — older records default to
+    ``"user"`` so the field is back-compatible.
     """
 
     simulation_id: str
@@ -114,6 +118,7 @@ class SimulationCostRecord(BaseModel):
     tokens_charged: int = Field(default=0, ge=0, description="Net tokens added to usage")
 
     period: str = Field(description="Monthly period (YYYY-MM) the charge counts toward")
+    charged_to: Literal["user", "team"] = "user"
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
     refunded: bool = False

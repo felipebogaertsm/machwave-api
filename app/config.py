@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     default_simulation_limit: int = 10
     default_monthly_token_limit: int = 10_000
 
+    # Maximum number of teams a non-admin user can belong to (owned + joined).
+    # Admins are unlimited.
+    default_team_membership_limit: int = 5
+
+    # Default per-team caps applied when a TeamAccount is first created.
+    default_team_motor_limit: int = 50
+    default_team_simulation_limit: int = 50
+    default_team_monthly_token_limit: int = 100_000
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

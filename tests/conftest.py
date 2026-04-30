@@ -126,3 +126,51 @@ def login_as(
 
 def logout(app: FastAPI) -> None:
     app.dependency_overrides.pop(get_current_user, None)
+
+
+async def make_team(
+    fake_gcs: FakeGCS,
+    *,
+    team_id: str,
+    name: str = "Test Team",
+    owner_uid: str,
+    owner_email: str | None = None,
+    members: list[tuple[str, str]] | None = None,
+) -> None:
+    """Seed a team with members directly into the in-memory GCS store.
+
+    ``members`` is a list of ``(user_id, role)`` tuples — the owner is
+    seeded automatically and should not be included. A fresh
+    :class:`TeamAccount` is materialised through the repo so role-default
+    limits apply.
+    """
+    from app.repositories.team import (
+        TeamAccountRepository,
+        TeamMembershipRepository,
+        TeamRepository,
+    )
+    from app.schemas.team import Team, TeamMembership
+
+    team_repo = TeamRepository()
+    membership_repo = TeamMembershipRepository()
+    account_repo = TeamAccountRepository()
+
+    await team_repo.save(Team(team_id=team_id, name=name, created_by=owner_uid))
+    await membership_repo.save(
+        TeamMembership(
+            team_id=team_id,
+            user_id=owner_uid,
+            email=owner_email or f"{owner_uid}@example.com",
+            role="owner",
+        )
+    )
+    for uid, role in members or []:
+        await membership_repo.save(
+            TeamMembership(
+                team_id=team_id,
+                user_id=uid,
+                email=f"{uid}@example.com",
+                role=role,  # type: ignore[arg-type]
+            )
+        )
+    await account_repo.get_or_create(team_id)

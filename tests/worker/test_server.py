@@ -35,9 +35,7 @@ class TestHealth:
 
 
 class TestPubsubPush:
-    def test_dispatches_to_run(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_dispatches_to_run(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_run = AsyncMock(return_value=None)
         monkeypatch.setattr(server_module, "run", fake_run)
 

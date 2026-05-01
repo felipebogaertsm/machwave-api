@@ -3,7 +3,10 @@ kind: Service
 metadata:
   name: machwave-worker-prod
   annotations:
-    run.googleapis.com/ingress: internal
+    # Pub/Sub push cannot reach internal-ingress services. Public ingress is
+    # safe here because IAM only grants run.invoker to the push service
+    # account — unauthenticated requests are rejected at the platform layer.
+    run.googleapis.com/ingress: all
 spec:
   template:
     metadata:

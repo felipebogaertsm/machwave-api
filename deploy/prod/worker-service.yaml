@@ -1,18 +1,24 @@
 apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
-  name: machwave-api-prod
+  name: machwave-worker-prod
   annotations:
-    run.googleapis.com/ingress: all
+    run.googleapis.com/ingress: internal
 spec:
   template:
     metadata:
       annotations:
-        autoscaling.knative.dev/minScale: "0"
-        autoscaling.knative.dev/maxScale: "10"
+        # Keep one instance warm so push deliveries skip the cold start.
+        autoscaling.knative.dev/minScale: "1"
+        # Cap parallelism — sims are CPU-heavy. Pub/Sub will queue overflow.
+        autoscaling.knative.dev/maxScale: "5"
         run.googleapis.com/startup-cpu-boost: "true"
     spec:
       serviceAccountName: machwave-api-prod@machwave.iam.gserviceaccount.com
+      # One sim per instance — autoscaler adds instances if backlog grows.
+      containerConcurrency: 1
+      # Push max ack deadline is 600s; align the request timeout with it.
+      timeoutSeconds: 600
       containers:
         - image: IMAGE_PLACEHOLDER
           ports:
@@ -26,17 +32,17 @@ spec:
               value: machwave-data-prod
             - name: FIREBASE_PROJECT_ID
               value: machwave-76f5f
-            - name: CORS_ORIGINS
-              value: https://machwave.felipebm.com
             - name: PUBSUB_TOPIC
               value: machwave-simulations-prod
+            - name: PUBSUB_SUBSCRIPTION
+              value: machwave-simulations-prod-push
           startupProbe:
             httpGet:
               path: /health
-            initialDelaySeconds: 10
-            periodSeconds: 10
+            initialDelaySeconds: 5
+            periodSeconds: 5
             timeoutSeconds: 5
-            failureThreshold: 12
+            failureThreshold: 24
           livenessProbe:
             httpGet:
               path: /health
@@ -46,5 +52,5 @@ spec:
             failureThreshold: 3
           resources:
             limits:
-              cpu: "1"
-              memory: 512Mi
+              cpu: "2"
+              memory: 2Gi

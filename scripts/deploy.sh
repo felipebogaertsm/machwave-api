@@ -14,9 +14,9 @@ TAG="${2:?usage: deploy.sh <env> <tag>}"
 
 CONFIG="deploy/${ENV}/config.yaml"
 SERVICE="deploy/${ENV}/service.yaml"
-JOB="deploy/${ENV}/job.yaml"
+WORKER_SERVICE="deploy/${ENV}/worker-service.yaml"
 
-for f in "$CONFIG" "$SERVICE" "$JOB"; do
+for f in "$CONFIG" "$SERVICE" "$WORKER_SERVICE"; do
   [[ -f "$f" ]] || { echo "missing: $f" >&2; exit 1; }
 done
 
@@ -38,10 +38,10 @@ echo "==> Building and pushing worker image: $IMAGE_WORKER"
 docker build -f Dockerfile.worker -t "$IMAGE_WORKER" .
 docker push "$IMAGE_WORKER"
 
+echo "==> Deploying worker service to Cloud Run ($GCP_REGION)"
+sed "s|IMAGE_PLACEHOLDER|${IMAGE_WORKER}|g" "$WORKER_SERVICE" \
+  | gcloud run services replace - --region "$GCP_REGION"
+
 echo "==> Deploying API service to Cloud Run ($GCP_REGION)"
 sed "s|IMAGE_PLACEHOLDER|${IMAGE_API}|g" "$SERVICE" \
   | gcloud run services replace - --region "$GCP_REGION"
-
-echo "==> Updating worker Cloud Run Job ($GCP_REGION)"
-sed "s|IMAGE_PLACEHOLDER|${IMAGE_WORKER}|g" "$JOB" \
-  | gcloud run jobs replace - --region "$GCP_REGION"

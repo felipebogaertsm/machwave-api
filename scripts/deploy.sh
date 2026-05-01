@@ -30,13 +30,17 @@ GCP_REGION=$(awk -F': *' '/^GCP_REGION:/ {print $2}' "$CONFIG")
 IMAGE_API="gcr.io/${GCP_PROJECT_ID}/machwave-api-${ENV}:${TAG}"
 IMAGE_WORKER="gcr.io/${GCP_PROJECT_ID}/machwave-worker-${ENV}:${TAG}"
 
+# Cloud Run runs linux/amd64. On Apple Silicon, plain `docker build` produces
+# arm64 images, which Cloud Run rejects with a misleading "Image not found".
+# `--provenance=false` strips attestation manifests, which some pull paths
+# choke on; harmless for our use.
+BUILD_FLAGS="--platform linux/amd64 --provenance=false"
+
 echo "==> Building and pushing API image: $IMAGE_API"
-docker build -t "$IMAGE_API" .
-docker push "$IMAGE_API"
+docker buildx build $BUILD_FLAGS -t "$IMAGE_API" --push .
 
 echo "==> Building and pushing worker image: $IMAGE_WORKER"
-docker build -f Dockerfile.worker -t "$IMAGE_WORKER" .
-docker push "$IMAGE_WORKER"
+docker buildx build $BUILD_FLAGS -f Dockerfile.worker -t "$IMAGE_WORKER" --push .
 
 echo "==> Deploying worker service to Cloud Run ($GCP_REGION)"
 sed "s|IMAGE_PLACEHOLDER|${IMAGE_WORKER}|g" "$WORKER_SERVICE" \

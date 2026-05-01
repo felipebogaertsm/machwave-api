@@ -66,8 +66,7 @@ class TestTeamRunRefund:
 
         monkeypatch.setattr(motor_schema.SolidMotorConfigSchema, "to_machwave", boom)
 
-        with pytest.raises(SystemExit):
-            await worker_run.run("sim-1", "t1", "team")
+        await worker_run.run("sim-1", "t1", "team")
 
         team_account_after = await team_account.get_or_create("t1")
         assert team_account_after.credits.tokens_used == 0

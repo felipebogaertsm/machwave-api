@@ -20,8 +20,8 @@ class TestSettings:
         assert settings.gcp_project_id == "gcp"
         # Defaults
         assert settings.env == "prod"
-        assert settings.cloud_run_job_name == "machwave-worker"
-        assert settings.cloud_run_job_region == "us-central1"
+        assert settings.pubsub_topic == "machwave-simulations"
+        assert settings.pubsub_subscription == "machwave-simulations-push"
 
     def test_invalid_env_value_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from pydantic import ValidationError

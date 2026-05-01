@@ -28,5 +28,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 COPY app/ ./app/
 
-# Worker entry point — SIM_ID and USER_ID are injected by Cloud Run Jobs
-CMD ["python", "-m", "app.worker.run"]
+EXPOSE 8080
+
+# Worker is a Cloud Run service that handles Pub/Sub push deliveries.
+CMD ["uvicorn", "app.worker.server:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]

@@ -144,7 +144,7 @@ async def run(simulation_id: str, owner_id: str, owner_kind: OwnerKind = "user")
     except Exception as exc:
         logger.exception("Failed to read simulation config")
         await fail(str(exc))
-        sys.exit(1)
+        return
 
     # 2. Mark as running
     await _set_status("running")
@@ -156,7 +156,7 @@ async def run(simulation_id: str, owner_id: str, owner_kind: OwnerKind = "user")
     except Exception as exc:
         logger.exception("Failed to build machwave motor/params objects")
         await fail(str(exc))
-        sys.exit(1)
+        return
 
     # 4. Run simulation
     try:
@@ -173,7 +173,7 @@ async def run(simulation_id: str, owner_id: str, owner_kind: OwnerKind = "user")
     except Exception as exc:
         logger.exception("Simulation failed")
         await fail(str(exc))
-        sys.exit(1)
+        return
 
     # 5. Store results
     try:
@@ -187,7 +187,7 @@ async def run(simulation_id: str, owner_id: str, owner_kind: OwnerKind = "user")
     except Exception as exc:
         logger.exception("Failed to serialise/store results")
         await fail(str(exc))
-        sys.exit(1)
+        return
 
     # 6. Post-charge: reconcile estimate against actual.
     # Best-effort: billing failure should not fail an otherwise-successful run.

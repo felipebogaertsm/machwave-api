@@ -24,10 +24,10 @@ class Settings(BaseSettings):
     # Firebase
     firebase_project_id: str
 
-    # GCP / Cloud Run Jobs
+    # GCP / Pub/Sub
     gcp_project_id: str
-    cloud_run_job_name: str = "machwave-worker"
-    cloud_run_job_region: str = "us-central1"
+    pubsub_topic: str = "machwave-simulations"
+    pubsub_subscription: str = "machwave-simulations-push"
 
     # CORS — accept a comma-separated string and split it
     cors_origins: str = "http://localhost:3000"

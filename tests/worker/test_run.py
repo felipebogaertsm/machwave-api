@@ -181,8 +181,7 @@ class TestWorkerRun:
     ) -> None:
         repo = SimulationRepository()
 
-        with pytest.raises(SystemExit):
-            await worker_run.run("sim-1", "u1")
+        await worker_run.run("sim-1", "u1")
 
         status = await repo.get_status("u1", "sim-1")
         assert status is not None
@@ -203,8 +202,7 @@ class TestWorkerRun:
             lambda self: (_ for _ in ()).throw(RuntimeError("translate boom")),
         )
 
-        with pytest.raises(SystemExit):
-            await worker_run.run("sim-1", "u1")
+        await worker_run.run("sim-1", "u1")
 
         status = await repo.get_status("u1", "sim-1")
         assert status is not None
@@ -229,8 +227,7 @@ class TestWorkerRun:
 
         monkeypatch.setattr(machwave_sim, "InternalBallisticsSimulation", _ExplodingSim)
 
-        with pytest.raises(SystemExit):
-            await worker_run.run("sim-1", "u1")
+        await worker_run.run("sim-1", "u1")
 
         status = await repo.get_status("u1", "sim-1")
         assert status is not None
@@ -263,8 +260,7 @@ class TestWorkerRun:
 
         monkeypatch.setattr(machwave_sim, "InternalBallisticsSimulation", _AlienSim)
 
-        with pytest.raises(SystemExit):
-            await worker_run.run("sim-1", "u1")
+        await worker_run.run("sim-1", "u1")
 
         status = await repo.get_status("u1", "sim-1")
         assert status is not None
